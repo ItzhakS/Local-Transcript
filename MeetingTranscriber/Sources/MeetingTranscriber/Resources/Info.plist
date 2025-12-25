@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App runs as menu bar only (no dock icon) -->
+    <key>LSUIElement</key>
+    <true/>
+    
+    <!-- Bundle Identifier -->
+    <key>CFBundleIdentifier</key>
+    <string>com.meetingtranscriber.app</string>
+    
+    <!-- App Name -->
+    <key>CFBundleName</key>
+    <string>MeetingTranscriber</string>
+    
+    <!-- Display Name -->
+    <key>CFBundleDisplayName</key>
+    <string>Meeting Transcriber</string>
+    
+    <!-- Version -->
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    
+    <!-- Screen Recording Permission (required for ScreenCaptureKit audio) -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>MeetingTranscriber needs screen recording permission to capture audio from your meeting apps like Zoom, Google Meet, and Teams.</string>
+    
+    <!-- Microphone Permission -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>MeetingTranscriber needs microphone access to transcribe what you say in meetings.</string>
+    
+    <!-- App Category -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    
+    <!-- Minimum macOS Version -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+</dict>
+</plist>
+
