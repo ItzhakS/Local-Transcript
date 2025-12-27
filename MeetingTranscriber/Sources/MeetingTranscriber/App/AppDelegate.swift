@@ -28,16 +28,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup menu bar
         setupMenuBar()
         
-        // Setup microphone monitoring
-        setupMicrophoneMonitoring()
+        // Setup notification center delegate first
+        UNUserNotificationCenter.current().delegate = self
         
-        // Request permissions
+        // Request permissions FIRST, then start monitoring
+        // This prevents race condition where permission dialogs briefly activate the mic
         Task {
             await Permissions.requestAllPermissions()
+            
+            // Small delay to let permission dialogs settle
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
+            
+            // Now setup microphone monitoring on the main actor
+            await MainActor.run {
+                self.setupMicrophoneMonitoring()
+            }
+            
+            Log.ui.info("Initialization complete - monitoring active")
         }
-        
-        // Setup notification center
-        UNUserNotificationCenter.current().delegate = self
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -147,9 +155,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 for await chunk in mixedStream {
                     // TODO: Send to transcription in Phase 2
                     // For now, just verify we're receiving audio
-                    if Int.random(in: 0..<100) == 0 {  // Log occasionally
-                        Log.audio.debug("Received chunk from \(chunk.speakerLabel): \(chunk.buffer.samples.count) samples")
-                    }
+                    Log.audio.debug("Received chunk from \(chunk.speakerLabel): \(chunk.buffer.samples.count) samples")
                 }
             }
             

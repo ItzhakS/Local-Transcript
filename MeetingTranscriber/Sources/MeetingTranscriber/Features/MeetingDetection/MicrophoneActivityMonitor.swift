@@ -14,6 +14,7 @@ class MicrophoneActivityMonitor: ObservableObject {
     private var isMonitoring = false
     private var propertyListenerAdded = false
     private var defaultInputDeviceID: AudioDeviceID = 0
+    private var listenerBlock: AudioObjectPropertyListenerBlock?
     
     // MARK: - Public API
     
@@ -34,7 +35,13 @@ class MicrophoneActivityMonitor: ObservableObject {
         
         defaultInputDeviceID = deviceID
         
-        // Add property listener for device usage
+        // Reset state - we'll check current state as baseline
+        isMicrophoneInUseByOtherApp = false
+        
+        // Check current state (to establish baseline and catch already-active mic)
+        checkMicrophoneUsageInitial()
+        
+        // Add property listener for device usage changes
         addPropertyListener()
         
         isMonitoring = true
@@ -95,13 +102,19 @@ class MicrophoneActivityMonitor: ObservableObject {
             mElement: kAudioObjectPropertyElementMain
         )
         
+        // Store the listener block so we can remove it later
+        listenerBlock = { [weak self] _, _ in
+            self?.checkMicrophoneUsage()
+        }
+        
+        guard let block = listenerBlock else { return }
+        
         let status = AudioObjectAddPropertyListenerBlock(
             defaultInputDeviceID,
             &propertyAddress,
-            DispatchQueue.main
-        ) { [weak self] _, _ in
-            self?.checkMicrophoneUsage()
-        }
+            DispatchQueue.main,
+            block
+        )
         
         if status == noErr {
             propertyListenerAdded = true
@@ -112,7 +125,7 @@ class MicrophoneActivityMonitor: ObservableObject {
     }
     
     private func removePropertyListener() {
-        guard propertyListenerAdded else { return }
+        guard propertyListenerAdded, let block = listenerBlock else { return }
         
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
@@ -123,15 +136,47 @@ class MicrophoneActivityMonitor: ObservableObject {
         let status = AudioObjectRemovePropertyListenerBlock(
             defaultInputDeviceID,
             &propertyAddress,
-            DispatchQueue.main
-        ) { _, _ in }
+            DispatchQueue.main,
+            block
+        )
         
         if status == noErr {
             propertyListenerAdded = false
+            listenerBlock = nil
             Log.detection.debug("Property listener removed successfully")
         } else {
             Log.detection.error("Failed to remove property listener: \(status)")
         }
+    }
+    
+    /// Check initial microphone state to establish baseline
+    private func checkMicrophoneUsageInitial() {
+        var isRunning: UInt32 = 0
+        var isRunningSize = UInt32(MemoryLayout<UInt32>.size)
+        
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let status = AudioObjectGetPropertyData(
+            defaultInputDeviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &isRunningSize,
+            &isRunning
+        )
+        
+        guard status == noErr else {
+            Log.detection.error("Failed to check initial microphone usage: \(status)")
+            return
+        }
+        
+        // Just update the internal state without triggering callback - this is the baseline
+        isMicrophoneInUseByOtherApp = isRunning != 0
+        Log.detection.info("Initial microphone state: \(self.isMicrophoneInUseByOtherApp ? "in use" : "idle")")
     }
     
     private func checkMicrophoneUsage() {
@@ -162,9 +207,11 @@ class MicrophoneActivityMonitor: ObservableObject {
         
         let micIsInUse = isRunning != 0
         
+        Log.detection.debug("Microphone state change detected: isRunning=\(micIsInUse), wasInUse=\(self.isMicrophoneInUseByOtherApp)")
+        
         // Check if this is a state change from not-in-use to in-use
         if micIsInUse && !isMicrophoneInUseByOtherApp {
-            Log.detection.info("Microphone activated by another application")
+            Log.detection.info("Microphone activated by another application - triggering callback")
             isMicrophoneInUseByOtherApp = true
             
             // Trigger callback
