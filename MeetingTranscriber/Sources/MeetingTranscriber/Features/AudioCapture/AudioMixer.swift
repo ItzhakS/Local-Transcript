@@ -80,10 +80,7 @@ actor AudioMixer {
         // Create labeled chunk with automatic labeling based on source
         let chunk = LabeledAudioChunk(buffer: buffer)
         
-        // Log buffer details periodically (every ~100th buffer to avoid spam)
-        if Int.random(in: 0..<100) == 0 {
-            Log.audio.debug("Mixed audio chunk - Source: \(chunk.speakerLabel), Samples: \(buffer.samples.count), Duration: \(String(format: "%.2f", buffer.duration))s")
-        }
+        Log.audio.debug("Mixed audio chunk - Source: \(chunk.speakerLabel), Samples: \(buffer.samples.count), Duration: \(String(format: "%.2f", buffer.duration))s")
         
         // Send to mixed stream
         mixedContinuation?.yield(chunk)

@@ -139,6 +139,8 @@ extension ScreenCaptureManager: SCStreamOutput {
             return
         }
         
+        Log.audio.debug("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples")
+        
         // Send to continuation
         audioBufferContinuation?.yield(audioBuffer)
     }

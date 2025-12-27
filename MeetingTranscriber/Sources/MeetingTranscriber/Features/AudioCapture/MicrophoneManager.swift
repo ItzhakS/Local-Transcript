@@ -142,6 +142,8 @@ actor MicrophoneManager {
         let frameLength = Int(finalBuffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
         
+        Log.audio.debug("Microphone: Produced buffer with \(samples.count) samples")
+        
         // Create AudioBuffer
         let audioBuffer = AudioBuffer(
             samples: samples,
