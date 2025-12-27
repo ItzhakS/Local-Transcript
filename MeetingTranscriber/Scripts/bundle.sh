@@ -87,6 +87,9 @@ cat > "$CONTENTS_DIR/Info.plist" << 'EOF'
     <key>NSMicrophoneUsageDescription</key>
     <string>MeetingTranscriber needs microphone access to transcribe what you say in meetings.</string>
     
+    <key>NSFocusStatusUsageDescription</key>
+    <string>MeetingTranscriber checks Focus mode status to show alerts instead of notifications when you're in Do Not Disturb mode.</string>
+    
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     

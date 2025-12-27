@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UserNotifications
+import Intents
 
 /// Application delegate managing menu bar, notifications, and audio capture coordination
 @MainActor
@@ -269,34 +270,70 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     // MARK: - Notifications
     
-    /// Check if Focus/Do Not Disturb mode is active
-    private func isFocusModeActive() -> Bool {
-        // Check Focus mode by reading the assertions database
-        // This works on macOS 12+ (Monterey and later)
-        let assertionsPath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json")
+    /// Check if Focus/Do Not Disturb mode is active using INFocusStatusCenter (macOS 12+)
+    private func isFocusModeActive() async -> Bool {
+        // Use the official INFocusStatusCenter API (requires Intents framework)
+        let focusCenter = INFocusStatusCenter.default
         
-        guard FileManager.default.fileExists(atPath: assertionsPath),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: assertionsPath)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let store = json["data"] as? [[String: Any]] else {
-            Log.detection.debug("Could not read Focus mode status - assuming not active")
-            return false
+        // Check authorization status
+        let authStatus = focusCenter.authorizationStatus
+        Log.detection.debug("Focus authorization status: \(authStatus.rawValue) (0=notDetermined, 1=restricted, 2=denied, 3=authorized)")
+        
+        if authStatus == .notDetermined {
+            // Request authorization if not yet determined
+            Log.detection.info("Requesting Focus status authorization...")
+            return await withCheckedContinuation { continuation in
+                focusCenter.requestAuthorization { status in
+                    Log.detection.info("Focus authorization response: \(status.rawValue)")
+                    if status == .authorized {
+                        let isFocused = focusCenter.focusStatus.isFocused ?? false
+                        Log.detection.info("Focus status authorization granted, isFocused: \(isFocused)")
+                        continuation.resume(returning: isFocused)
+                    } else {
+                        Log.detection.warning("Focus status authorization denied (status: \(status.rawValue)) - falling back to file check")
+                        continuation.resume(returning: self.checkFocusModeViaFile())
+                    }
+                }
+            }
+        } else if authStatus == .authorized {
+            let focusStatus = focusCenter.focusStatus
+            let isFocused = focusStatus.isFocused ?? false
+            Log.detection.debug("Focus mode check via INFocusStatusCenter: isFocused=\(isFocused)")
+            return isFocused
+        } else {
+            // Authorization denied or restricted - fall back to file-based check
+            Log.detection.warning("Focus status authorization: \(authStatus.rawValue) - using fallback")
+            return checkFocusModeViaFile()
         }
-        
-        // If there are any active assertions, Focus/DND mode is on
-        let isActive = !store.isEmpty
-        Log.detection.debug("Focus mode active: \(isActive)")
-        return isActive
     }
     
-    private func showMeetingDetectedNotification() async {
-        // If Focus/DND mode is active, use alert dialog instead (notifications are hidden in DND)
-        if isFocusModeActive() {
-            Log.detection.info("Focus/DND mode active - using alert dialog instead of notification")
-            await showMeetingDetectedAlert()
-            return
+    /// Fallback file-based Focus mode detection for older macOS versions
+    private func checkFocusModeViaFile() -> Bool {
+        let possiblePaths = [
+            (NSHomeDirectory() as NSString).appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json"),
+            (NSHomeDirectory() as NSString).appendingPathComponent("Library/DoNotDisturb/DB/ModeConfigurations.json")
+        ]
+        
+        for assertionsPath in possiblePaths {
+            if FileManager.default.fileExists(atPath: assertionsPath),
+               let data = try? Data(contentsOf: URL(fileURLWithPath: assertionsPath)),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let store = json["data"] as? [[String: Any]],
+               !store.isEmpty {
+                Log.detection.info("Focus mode detected via file: \(assertionsPath)")
+                return true
+            }
         }
         
+        Log.detection.debug("Focus mode not detected via file check")
+        return false
+    }
+    
+    /// Track if user responded to notification (to avoid showing duplicate alert)
+    private var notificationResponseReceived = false
+    private var pendingNotificationId: String?
+    
+    private func showMeetingDetectedNotification() async {
         let center = UNUserNotificationCenter.current()
         
         // Check notification authorization first
@@ -321,6 +358,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         }
         
+        // Reset response tracking
+        notificationResponseReceived = false
+        let notificationId = UUID().uuidString
+        pendingNotificationId = notificationId
+        
         let content = UNMutableNotificationContent()
         content.title = "Meeting Detected"
         content.body = "Another app is using your microphone. Start recording?"
@@ -328,14 +370,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         content.categoryIdentifier = "MEETING_DETECTED"
         
         let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
+            identifier: notificationId,
             content: content,
             trigger: nil  // Show immediately
         )
         
         do {
             try await center.add(request)
-            Log.detection.info("Meeting detection notification shown successfully with category: \(content.categoryIdentifier, privacy: .public)")
+            Log.detection.info("Meeting detection notification sent (id: \(notificationId, privacy: .public))")
+            
+            // Start backup timer - if no response in 5 seconds, show alert dialog
+            // This handles the case where DND silences the notification
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5 seconds
+                
+                await MainActor.run {
+                    // Only show alert if this notification is still pending and no response received
+                    if self.pendingNotificationId == notificationId && !self.notificationResponseReceived && !self.isRecording {
+                        Log.detection.info("No notification response after 5s - showing backup alert (likely DND active)")
+                        // Remove the pending notification since we're showing alert instead
+                        center.removeDeliveredNotifications(withIdentifiers: [notificationId])
+                        Task {
+                            await self.showMeetingDetectedAlert()
+                        }
+                    }
+                }
+            }
+            
         } catch let error as NSError {
             Log.detection.error("Failed to show notification: \(error.localizedDescription, privacy: .public) (code: \(error.code), domain: \(error.domain, privacy: .public)) - falling back to alert")
             await showMeetingDetectedAlert()
@@ -401,6 +462,12 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         let actionId = response.actionIdentifier
         
         if categoryId == "MEETING_DETECTED" {
+            // Mark that we received a response - prevents backup alert from showing
+            Task { @MainActor in
+                self.notificationResponseReceived = true
+                self.pendingNotificationId = nil
+            }
+            
             switch actionId {
             case "START_RECORDING", UNNotificationDefaultActionIdentifier:
                 // User tapped "Start Recording" button or the notification itself
