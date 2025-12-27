@@ -80,7 +80,11 @@ actor AudioMixer {
         // Create labeled chunk with automatic labeling based on source
         let chunk = LabeledAudioChunk(buffer: buffer)
         
-        Log.audio.debug("Mixed audio chunk - Source: \(chunk.speakerLabel), Samples: \(buffer.samples.count), Duration: \(String(format: "%.2f", buffer.duration))s")
+        // Calculate energy to detect if it's silence
+        let energy = buffer.samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, buffer.samples.count))
+        let isSilence = energy < 1e-6 // Simple threshold
+        
+        Log.audio.debug("Mixed audio chunk - Source: \(chunk.speakerLabel, privacy: .public), Samples: \(buffer.samples.count), Duration: \(String(format: "%.2f", buffer.duration), privacy: .public)s, Energy: \(energy, privacy: .public) \(isSilence ? "(Silence)" : "(Signal)", privacy: .public)")
         
         // Send to mixed stream
         mixedContinuation?.yield(chunk)

@@ -28,8 +28,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup menu bar
         setupMenuBar()
         
-        // Setup notification center delegate first
-        UNUserNotificationCenter.current().delegate = self
+        // Setup notification center delegate and register categories
+        setupNotifications()
         
         // Request permissions FIRST, then start monitoring
         // This prevents race condition where permission dialogs briefly activate the mic
@@ -46,6 +46,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             
             Log.ui.info("Initialization complete - monitoring active")
         }
+    }
+    
+    private func setupNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        
+        // Create actions for the meeting detected notification
+        let startRecordingAction = UNNotificationAction(
+            identifier: "START_RECORDING",
+            title: "Start Recording",
+            options: [.foreground]
+        )
+        
+        let dismissAction = UNNotificationAction(
+            identifier: "DISMISS",
+            title: "Dismiss",
+            options: []
+        )
+        
+        // Create the category with actions
+        let meetingCategory = UNNotificationCategory(
+            identifier: "MEETING_DETECTED",
+            actions: [startRecordingAction, dismissAction],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        
+        // Register the category
+        center.setNotificationCategories([meetingCategory])
+        
+        Log.ui.info("Notification categories registered")
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -155,7 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 for await chunk in mixedStream {
                     // TODO: Send to transcription in Phase 2
                     // For now, just verify we're receiving audio
-                    Log.audio.debug("Received chunk from \(chunk.speakerLabel): \(chunk.buffer.samples.count) samples")
+                    Log.audio.debug("Received chunk from \(chunk.speakerLabel, privacy: .public): \(chunk.buffer.samples.count) samples")
                 }
             }
             
@@ -238,7 +269,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     // MARK: - Notifications
     
+    /// Check if Focus/Do Not Disturb mode is active
+    private func isFocusModeActive() -> Bool {
+        // Check Focus mode by reading the assertions database
+        // This works on macOS 12+ (Monterey and later)
+        let assertionsPath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json")
+        
+        guard FileManager.default.fileExists(atPath: assertionsPath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: assertionsPath)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let store = json["data"] as? [[String: Any]] else {
+            Log.detection.debug("Could not read Focus mode status - assuming not active")
+            return false
+        }
+        
+        // If there are any active assertions, Focus/DND mode is on
+        let isActive = !store.isEmpty
+        Log.detection.debug("Focus mode active: \(isActive)")
+        return isActive
+    }
+    
     private func showMeetingDetectedNotification() async {
+        // If Focus/DND mode is active, use alert dialog instead (notifications are hidden in DND)
+        if isFocusModeActive() {
+            Log.detection.info("Focus/DND mode active - using alert dialog instead of notification")
+            await showMeetingDetectedAlert()
+            return
+        }
+        
+        let center = UNUserNotificationCenter.current()
+        
+        // Check notification authorization first
+        let settings = await center.notificationSettings()
+        
+        if settings.authorizationStatus != .authorized {
+            Log.detection.warning("Notifications not authorized (status: \(settings.authorizationStatus.rawValue)). Requesting permission...")
+            
+            // Try to request permission
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                if !granted {
+                    Log.detection.error("Notification permission denied by user - falling back to alert")
+                    await showMeetingDetectedAlert()
+                    return
+                }
+                Log.detection.info("Notification permission granted on-demand")
+            } catch {
+                Log.detection.error("Failed to request notification permission: \(error) - falling back to alert")
+                await showMeetingDetectedAlert()
+                return
+            }
+        }
+        
         let content = UNMutableNotificationContent()
         content.title = "Meeting Detected"
         content.body = "Another app is using your microphone. Start recording?"
@@ -252,10 +334,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         )
         
         do {
-            try await UNUserNotificationCenter.current().add(request)
-            Log.detection.info("Meeting detection notification shown")
-        } catch {
-            Log.detection.error("Failed to show notification: \(error.localizedDescription)")
+            try await center.add(request)
+            Log.detection.info("Meeting detection notification shown successfully with category: \(content.categoryIdentifier, privacy: .public)")
+        } catch let error as NSError {
+            Log.detection.error("Failed to show notification: \(error.localizedDescription, privacy: .public) (code: \(error.code), domain: \(error.domain, privacy: .public)) - falling back to alert")
+            await showMeetingDetectedAlert()
+        }
+    }
+    
+    /// Fallback alert dialog when notifications aren't available
+    private func showMeetingDetectedAlert() async {
+        let alert = NSAlert()
+        alert.messageText = "Meeting Detected"
+        alert.informativeText = "Another app is using your microphone. Would you like to start recording?"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Start Recording")
+        alert.addButton(withTitle: "Dismiss")
+        
+        // Play alert sound
+        NSSound.beep()
+        
+        let response = alert.runModal()
+        
+        if response == .alertFirstButtonReturn {
+            Log.detection.info("User chose to start recording from alert")
+            await startRecording()
+        } else {
+            Log.detection.info("User dismissed meeting detection alert")
         }
     }
     
@@ -292,10 +397,22 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     ) {
         Log.ui.info("Notification response received: \(response.actionIdentifier)")
         
-        if response.notification.request.content.categoryIdentifier == "MEETING_DETECTED" {
-            // User tapped the notification - start recording
-            Task { @MainActor in
-                await self.startRecording()
+        let categoryId = response.notification.request.content.categoryIdentifier
+        let actionId = response.actionIdentifier
+        
+        if categoryId == "MEETING_DETECTED" {
+            switch actionId {
+            case "START_RECORDING", UNNotificationDefaultActionIdentifier:
+                // User tapped "Start Recording" button or the notification itself
+                Task { @MainActor in
+                    await self.startRecording()
+                    completionHandler()
+                }
+            case "DISMISS", UNNotificationDismissActionIdentifier:
+                // User dismissed the notification
+                Log.ui.info("User dismissed meeting detection notification")
+                completionHandler()
+            default:
                 completionHandler()
             }
         } else {

@@ -139,7 +139,8 @@ extension ScreenCaptureManager: SCStreamOutput {
             return
         }
         
-        Log.audio.debug("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples")
+        let energy = audioBuffer.samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, audioBuffer.samples.count))
+        Log.audio.debug("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples, Energy: \(energy, privacy: .public)")
         
         // Send to continuation
         audioBufferContinuation?.yield(audioBuffer)

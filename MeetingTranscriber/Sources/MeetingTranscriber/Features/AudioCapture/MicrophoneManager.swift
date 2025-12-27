@@ -142,7 +142,8 @@ actor MicrophoneManager {
         let frameLength = Int(finalBuffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
         
-        Log.audio.debug("Microphone: Produced buffer with \(samples.count) samples")
+        let energy = samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, samples.count))
+        Log.audio.debug("Microphone: Produced buffer with \(samples.count) samples, Energy: \(energy, privacy: .public)")
         
         // Create AudioBuffer
         let audioBuffer = AudioBuffer(

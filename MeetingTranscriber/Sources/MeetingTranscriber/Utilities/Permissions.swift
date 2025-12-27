@@ -123,8 +123,10 @@ enum Permissions {
     }
     
     /// Request all required permissions sequentially
+    /// Note: Notification permission is NOT requested here - it's requested on-demand
+    /// when auto-detection triggers and needs to show a notification
     static func requestAllPermissions() async {
-        Log.permissions.info("Requesting all permissions")
+        Log.permissions.info("Requesting essential permissions (screen recording, microphone)")
         
         // Request screen recording first
         if !checkScreenRecordingPermission() {
@@ -136,10 +138,9 @@ enum Permissions {
             _ = await requestMicrophonePermission()
         }
         
-        // Request notifications
-        if !(await checkNotificationPermission()) {
-            _ = await requestNotificationPermission()
-        }
+        // Note: Notification permission is intentionally NOT requested at startup
+        // It will be requested on-demand when auto-detection triggers
+        // This prevents unnecessary permission dialogs during manual recording
     }
     
     // MARK: - Helper Methods
