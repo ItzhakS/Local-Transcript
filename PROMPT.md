@@ -12,11 +12,17 @@ Native macOS menu bar app that captures and transcribes online meetings in real-
 ## Technical Stack
 - **Language**: Swift 5.9+, SwiftUI for UI
 - **Audio Capture**: ScreenCaptureKit (system audio + mic)
-- **Transcription**: MLX Whisper (Apple Silicon native) or faster-whisper via Python bridge
-- **Speaker Diarization**: pyannote-audio (Python, called via subprocess or embedded)
-- **Summaries**: Ollama (local LLM) or MLX-LM
+- **Transcription**: WhisperKit (native Swift, Apple Silicon optimized via CoreML)
+- **Speaker Diarization**: SpeakerKit (native Swift, from Argmax - same creators as WhisperKit)
+- **Summaries**: Ollama (local LLM)
 - **Storage**: SQLite via GRDB.swift or SwiftData
 - **Minimum macOS**: 13.0
+
+> **Note**: We chose WhisperKit + SpeakerKit over MLX Whisper + pyannote-audio because:
+> - 100% native Swift - no Python bridge or subprocess required
+> - Simpler distribution - single app bundle without bundled Python runtime
+> - Lower latency - no IPC overhead between Swift and Python
+> - SpeakerKit: ~10MB, matches pyannote accuracy, ~1 second for 4 min audio
 
 ## Features (Priority Order)
 
@@ -59,12 +65,11 @@ MeetingTranscriber/
 │   │   ├── MicrophoneManager.swift      # AVAudioEngine mic capture
 │   │   └── AudioMixer.swift             # Combine streams
 │   ├── Transcription/
-│   │   ├── WhisperEngine.swift          # MLX Whisper interface
-│   │   ├── TranscriptionManager.swift   # Orchestrates transcription
-│   │   └── PythonBridge.swift           # For faster-whisper fallback
+│   │   ├── WhisperEngine.swift          # WhisperKit interface
+│   │   └── TranscriptionManager.swift   # Orchestrates transcription
 │   ├── Diarization/
-│   │   ├── SpeakerIdentifier.swift      # Speaker tracking
-│   │   └── PyAnnoteBridge.swift         # Python diarization bridge
+│   │   ├── SpeakerKitManager.swift      # SpeakerKit interface
+│   │   └── SpeakerIdentifier.swift      # Speaker tracking & labeling
 │   ├── Summary/
 │   │   ├── OllamaClient.swift           # Local LLM interface
 │   │   └── SummaryGenerator.swift       # Summary prompts/logic
@@ -115,11 +120,24 @@ let filter = SCContentFilter(desktopIndependentWindow: zoomWindow)
   - NSScreenCaptureUsageDescription
   - NSMicrophoneUsageDescription
 
-### MLX Whisper Integration
-Either:
-1. Use mlx-swift bindings directly (if available)
-2. Bundle Python with mlx-whisper, call via Process()
-3. Use whisper.cpp with CoreML backend as fallback
+### WhisperKit Integration
+WhisperKit is a native Swift package from Argmax that uses CoreML for Apple Silicon optimization:
+```swift
+import WhisperKit
+
+let whisperKit = try await WhisperKit(model: "base")
+let result = try await whisperKit.transcribe(audioArray: samples)
+```
+
+### SpeakerKit Integration (Diarization)
+SpeakerKit is the companion package for speaker diarization:
+```swift
+import SpeakerKit
+
+let diarizer = try await SpeakerDiarizer()
+let segments = try await diarizer.diarize(audioArray: samples)
+// Returns: [(start: Double, end: Double, speaker: Int)]
+```
 
 ### Real-time Streaming Approach
 - Buffer audio in 3-5 second chunks
@@ -134,9 +152,10 @@ Either:
 - App size < 500MB (model can be downloaded separately)
 
 ## Reference Projects
+- [WhisperKit](https://github.com/argmaxinc/WhisperKit) - Native Swift Whisper for Apple Silicon
+- [SpeakerKit](https://github.com/argmaxinc/SpeakerKit) - Native Swift speaker diarization
 - [Buzz](https://github.com/chidiwilliams/buzz) - Open-source Whisper desktop app
 - [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) - Commercial reference
-- [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) - Apple Silicon Whisper
 
 ## Getting Started
 See INITIAL_PROMPT.md for the first implementation prompt to give Cursor.

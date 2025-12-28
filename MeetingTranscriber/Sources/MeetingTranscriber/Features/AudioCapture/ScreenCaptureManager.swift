@@ -139,8 +139,11 @@ extension ScreenCaptureManager: SCStreamOutput {
             return
         }
         
+        // Only log non-silence audio to reduce log spam
         let energy = audioBuffer.samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, audioBuffer.samples.count))
-        Log.audio.debug("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples, Energy: \(energy, privacy: .public)")
+        if energy > 1e-6 {
+            Log.audio.info("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples, Energy: \(energy, privacy: .public)")
+        }
         
         // Send to continuation
         audioBufferContinuation?.yield(audioBuffer)

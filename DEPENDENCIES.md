@@ -20,53 +20,32 @@ ollama pull llama3.1:8b      # Better quality
 ollama pull mistral:7b       # Good balance
 ```
 
-### 3. Python Environment (for faster-whisper/pyannote fallback)
-```bash
-# Create dedicated environment
-python3 -m venv ~/.meetingtranscriber-env
-source ~/.meetingtranscriber-env/bin/activate
+### 3. WhisperKit Models (Auto-Downloaded)
 
-# Install dependencies
-pip install faster-whisper
-pip install pyannote.audio
-pip install torch torchaudio
-
-# For Apple Silicon optimization
-pip install mlx mlx-whisper
+WhisperKit models are automatically downloaded on first use. They are cached in:
+```
+~/Library/Caches/whisperkit/
 ```
 
-### 4. Whisper Model Files
+Available models (specified in code):
+- `tiny` - Fastest, lowest quality (~75MB)
+- `base` - Good for real-time (~150MB) **← Default**
+- `small` - Balanced (~500MB)
+- `medium` - High quality (~1.5GB)
+- `large-v3` - Best quality (~3GB)
 
-**Option A: MLX Whisper (Recommended for Apple Silicon)**
+To pre-download a model:
 ```bash
-# Models download automatically on first use, or pre-download:
-python -c "from mlx_whisper import transcribe; transcribe('test.wav', path_or_hf_repo='mlx-community/whisper-large-v3-turbo')"
+# Models download automatically when WhisperKit initializes
+# No manual setup required!
 ```
 
-Available MLX models:
-- `mlx-community/whisper-tiny` - Fastest, lowest quality
-- `mlx-community/whisper-base` - Good for real-time
-- `mlx-community/whisper-small` - Balanced
-- `mlx-community/whisper-medium` - High quality
-- `mlx-community/whisper-large-v3-turbo` - Best quality, still fast on M-series
+### 4. SpeakerKit (for Speaker Diarization)
 
-**Option B: faster-whisper models**
-```bash
-# Downloads automatically, or specify cache location:
-export WHISPER_CACHE_DIR=~/.cache/whisper
-```
+SpeakerKit is a native Swift package - no setup required. Models (~10MB) download automatically.
 
-### 5. Pyannote Access Token (for speaker diarization)
-```bash
-# 1. Create account at huggingface.co
-# 2. Accept terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
-# 3. Create access token at: https://huggingface.co/settings/tokens
-# 4. Set environment variable:
-export HF_TOKEN="your_token_here"
-
-# Or add to ~/.zshrc for persistence
-echo 'export HF_TOKEN="your_token_here"' >> ~/.zshrc
-```
+> **Note**: Python environment, pyannote-audio, and HuggingFace tokens are **NOT required**. 
+> The entire transcription + diarization pipeline is 100% native Swift.
 
 ---
 
@@ -87,19 +66,24 @@ let package = Package(
         .executable(name: "MeetingTranscriber", targets: ["MeetingTranscriber"])
     ],
     dependencies: [
+        // Transcription - Native Swift Whisper
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
+        
+        // Speaker Diarization - Native Swift (add when ready for Phase 3)
+        // .package(url: "https://github.com/argmaxinc/SpeakerKit.git", from: "0.1.0"),
+        
         // Database
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0"),
         
         // Keychain access for storing tokens
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
-        
-        // Optional: If using whisper.cpp directly
-        // .package(url: "https://github.com/ggerganov/whisper.cpp.git", branch: "master"),
     ],
     targets: [
         .executableTarget(
             name: "MeetingTranscriber",
             dependencies: [
+                .product(name: "WhisperKit", package: "WhisperKit"),
+                // .product(name: "SpeakerKit", package: "SpeakerKit"),  // Add for Phase 3
                 .product(name: "GRDB", package: "GRDB.swift"),
                 "KeychainAccess",
             ],
@@ -114,6 +98,8 @@ let package = Package(
     ]
 )
 ```
+
+> **No Python Required!** The entire stack is native Swift.
 
 ---
 
@@ -168,10 +154,11 @@ sox -n test_tone.wav synth 10 sine 440
 # Use QuickTime → New Audio Recording → Save
 ```
 
-### Simulating Multiple Speakers
+### Simulating Multiple Speakers (Phase 3)
 1. Open two browser tabs with different YouTube videos
 2. Play both at low volume
-3. Capture browser audio - diarization should attempt to separate speakers
+3. Capture browser audio - SpeakerKit will identify distinct speakers
+4. Each speaker will be labeled (Speaker 1, Speaker 2, etc.)
 
 ---
 
@@ -204,11 +191,6 @@ ollama serve
 # Check if model is downloaded
 ollama list
 ```
-
-### "PyAnnote model download fails"
-- Ensure HF_TOKEN is set correctly
-- Check you've accepted model terms on HuggingFace
-- Try manual download: `huggingface-cli download pyannote/speaker-diarization-3.1`
 
 ### High CPU usage during transcription
 - Use smaller Whisper model (tiny or base for real-time)

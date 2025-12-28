@@ -1,10 +1,10 @@
-# MeetingTranscriber - Phase 1: Audio Capture
+# MeetingTranscriber - Phases 1 & 2: Audio Capture + Transcription
 
-A native macOS menu bar app that captures system audio and microphone input for meeting transcription.
+A native macOS menu bar app that captures system audio and microphone input, transcribing meetings in real-time.
 
 ## Features ✨
 
-### Phase 1 (Current)
+### Phase 1 (Complete)
 - ✅ **Menu bar app** - Runs in menu bar only, no dock icon
 - ✅ **System audio capture** - Captures all display audio via ScreenCaptureKit
 - ✅ **Microphone capture** - Captures your voice via AVAudioEngine
@@ -13,11 +13,18 @@ A native macOS menu bar app that captures system audio and microphone input for 
 - ✅ **Permission management** - Handles screen recording, microphone, and notification permissions
 - ✅ **Audio mixing** - Combines system and mic audio with speaker labels ("Me" / "Others")
 
+### Phase 2 (Complete)
+- ✅ **Real-time transcription** - Uses WhisperKit (CoreML-optimized for Apple Silicon)
+- ✅ **Live transcript window** - Displays transcription as it happens
+- ✅ **Speaker labeling** - "Me" for microphone, "Others" for system audio
+- ✅ **Confidence scoring** - Visual indicators for transcription quality
+- ✅ **Voice Activity Detection** - Only transcribes speech, ignores silence
+- ✅ **Smart buffering** - 3-second segments with speaker change detection
+
 ### Coming in Future Phases
-- 🔄 Real-time transcription (Phase 2)
-- 🔄 Speaker diarization (Phase 3)
+- 🔄 Advanced speaker diarization via SpeakerKit (Phase 3) - Native Swift, no Python
 - 🔄 Storage and history (Phase 4)
-- 🔄 AI summaries (Phase 5)
+- 🔄 AI summaries via Ollama (Phase 5)
 
 ## Requirements 📋
 
@@ -92,18 +99,20 @@ Look for the waveform icon (○~) in your menu bar.
 1. **Click** the menu bar icon
 2. Select **"Start Recording"**
 3. The icon fills (●~) to show recording is active
-4. Click again and select **"Stop Recording"** when done
+4. **Transcript window** opens automatically showing live transcription
+5. Click again and select **"Stop Recording"** when done
 
 ### Auto-Detect Recording
 
 1. Join a meeting (Zoom, Google Meet, Teams, etc.)
 2. When the meeting app activates your microphone, you'll see a notification
 3. Click the notification to **start recording automatically**
+4. Transcript window will open with live transcription
 
-### What's Being Captured
+### What's Being Captured & Transcribed
 
-- **System Audio** (labeled "Others"): All audio playing on your Mac (meeting participants)
-- **Microphone** (labeled "Me"): Your voice from the default microphone
+- **System Audio** (labeled "Others"): All audio playing on your Mac (meeting participants) - transcribed in real-time
+- **Microphone** (labeled "Me"): Your voice from the default microphone - transcribed in real-time
 
 Audio is captured at 16kHz mono (optimized for speech transcription).
 
@@ -111,21 +120,28 @@ Audio is captured at 16kHz mono (optimized for speech transcription).
 
 You can test the app without joining a real meeting:
 
-### Test System Audio Capture:
-1. Open **QuickTime Player** or **Music**
-2. Play any audio
-3. Start recording in MeetingTranscriber
-4. Audio buffers from "Others" will be captured
+### Test System Audio Capture + Transcription:
+1. Open **YouTube** and play a video with clear speech
+2. Start recording in MeetingTranscriber
+3. Transcript window opens - you should see text appear labeled "Others"
+4. Verify transcription accuracy
 
-### Test Microphone Capture:
+### Test Microphone Capture + Transcription:
 1. Start recording in MeetingTranscriber
-2. Speak into your microphone
-3. Audio buffers from "Me" will be captured
+2. Speak clearly into your microphone
+3. You should see text appear labeled "Me"
+4. Verify transcription accuracy
 
-### Test Auto-Detection:
-1. Open any app that uses the microphone (e.g., Voice Memos, FaceTime)
-2. Start recording/call in that app
-3. MeetingTranscriber should show a notification prompting you to record
+### Test Both Streams:
+1. Play YouTube video (Others)
+2. Speak into microphone (Me)
+3. Both should appear in transcript with correct labels
+4. Verify speaker detection works correctly
+
+### First Recording Note:
+- The first time you start recording, WhisperKit will download the transcription model (~150MB)
+- This happens automatically in the background
+- Subsequent recordings will be instant
 
 ## Troubleshooting 🔧
 
@@ -146,6 +162,23 @@ You can test the app without joining a real meeting:
 1. System Settings → Privacy & Security → Microphone
 2. Ensure MeetingTranscriber is toggled ON
 3. Check System Settings → Sound → Input for correct device
+
+### "No transcription appearing"
+**Possible causes:**
+- Model still downloading (check Console.app)
+- Audio too quiet (VAD threshold)
+- Background noise interfering
+**Solution:**
+- Check Console.app for "Transcription" category logs
+- Speak clearly and continuously for 3+ seconds
+- Ensure audio levels are adequate
+
+### "Transcription is slow or inaccurate"
+**Solutions:**
+- First transcription downloads model (~150MB) - be patient
+- Base model prioritizes speed over accuracy
+- Ensure clear audio with minimal background noise
+- Check CPU usage in Activity Monitor
 
 ### "Notifications not appearing"
 **Solution:**
@@ -175,8 +208,15 @@ MeetingTranscriber/
 │   │   │   ├── ScreenCaptureManager.swift  # System audio capture
 │   │   │   ├── MicrophoneManager.swift     # Mic capture
 │   │   │   └── AudioMixer.swift            # Combines streams
+│   │   ├── Transcription/                  # ⭐ NEW in Phase 2
+│   │   │   ├── WhisperEngine.swift         # WhisperKit wrapper
+│   │   │   └── TranscriptionManager.swift  # Audio buffering + VAD
 │   │   └── MeetingDetection/
 │   │       └── MicrophoneActivityMonitor.swift  # Auto-detection
+│   ├── UI/
+│   │   └── TranscriptWindow/               # ⭐ NEW in Phase 2
+│   │       ├── TranscriptView.swift        # Live transcript UI
+│   │       └── TranscriptWindowController.swift  # Window management
 │   └── Utilities/
 │       ├── Permissions.swift               # Permission handling
 │       ├── Logger.swift                    # Structured logging
@@ -208,15 +248,25 @@ Logs are written using OSLog. To view them:
    - `UI` - Menu bar and user interactions
    - `Detection` - Meeting detection and monitoring
    - `Permissions` - Permission requests and status
+   - `Transcription` - ⭐ Model loading, transcription results, performance
+
+Example logs:
+```
+[Transcription] Loading Whisper model: base...
+[Transcription] Whisper model loaded successfully
+[Transcription] Starting transcription of 48000 samples (3.00s)
+[Transcription] Transcription complete: "Hello world" (confidence: 0.95, processing time: 0.82s)
+```
 
 ## What's Next? 🔮
 
-Phase 1 provides the foundation for audio capture. Next phases will add:
+Phase 2 provides real-time transcription with basic speaker labeling. Next phases will add:
 
-- **Phase 2**: Real-time transcription using Whisper
-- **Phase 3**: Speaker diarization to identify who said what
-- **Phase 4**: Storage, search, and meeting history
-- **Phase 5**: AI-powered summaries and action items
+- **Phase 3**: Advanced speaker diarization via **SpeakerKit** (native Swift, no Python required) to identify multiple speakers in system audio
+- **Phase 4**: Storage, search, and meeting history via GRDB.swift
+- **Phase 5**: AI-powered summaries and action items via Ollama
+
+See `PHASE2_SUMMARY.md` for detailed Phase 2 implementation notes.
 
 ## Architecture 🏗️
 
@@ -242,14 +292,38 @@ Phase 1 provides the foundation for audio capture. Next phases will add:
 ┌───▼─────────▼─────────┐
 │     AudioMixer         │
 │  Labels: Me / Others   │
-└────────────────────────┘
+└────────┬───────────────┘
+         │
+┌────────▼──────────────────────┐
+│   TranscriptionManager         │
+│  • Audio buffering             │
+│  • Voice Activity Detection    │
+│  • Speaker change detection    │
+└────────┬──────────────────────┘
+         │
+┌────────▼──────────────────────┐
+│      WhisperEngine             │
+│  • WhisperKit (CoreML)         │
+│  • Real-time transcription     │
+└────────┬──────────────────────┘
+         │
+┌────────▼──────────────────────┐
+│     TranscriptView             │
+│  • Live transcript display     │
+│  • Speaker labels              │
+│  • Confidence indicators       │
+└────────────────────────────────┘
 ```
 
 ## License & Credits 📄
 
-Built with Swift, ScreenCaptureKit, and AVFoundation.
+Built with:
+- Swift 5.9+, SwiftUI
+- ScreenCaptureKit (system audio), AVFoundation (microphone)
+- [WhisperKit](https://github.com/argmaxinc/WhisperKit) - Native Swift transcription
+- [SpeakerKit](https://github.com/argmaxinc/SpeakerKit) - Native Swift diarization (Phase 3)
 
 ---
 
-**Note**: This is Phase 1. Audio is captured but not yet transcribed. Transcription will be added in Phase 2.
+**Note**: Phases 1 & 2 are complete. Audio is captured and transcribed in real-time. Transcripts are displayed live but not yet saved to disk. Storage will be added in Phase 4.
 

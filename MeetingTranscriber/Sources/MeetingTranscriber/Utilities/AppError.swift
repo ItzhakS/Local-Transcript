@@ -9,6 +9,7 @@ enum AppError: LocalizedError {
     case audioFormatError
     case microphoneInUse
     case streamConfigurationFailed
+    case transcriptionError(String)
     
     enum PermissionType {
         case screenRecording
@@ -39,6 +40,8 @@ enum AppError: LocalizedError {
             return "Microphone is already in use by another application."
         case .streamConfigurationFailed:
             return "Failed to configure audio stream. Please try again."
+        case .transcriptionError(let reason):
+            return "Transcription failed: \(reason)"
         }
     }
     
@@ -61,6 +64,8 @@ enum AppError: LocalizedError {
             return "Close other applications using the microphone or wait for them to finish."
         case .streamConfigurationFailed:
             return "Restart the application and try again. If the problem persists, check your audio device settings."
+        case .transcriptionError:
+            return "Restart the application and try again. If the problem persists, check Console.app for detailed logs."
         default:
             return nil
         }

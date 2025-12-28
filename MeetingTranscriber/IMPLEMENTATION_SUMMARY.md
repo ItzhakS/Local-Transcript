@@ -134,7 +134,7 @@ MeetingTranscriber.app/
 Phase 1 focuses purely on audio capture infrastructure. The following are intentionally NOT implemented yet:
 
 - ❌ Transcription (Phase 2)
-- ❌ Speaker diarization beyond basic source labeling (Phase 3)
+- ❌ Speaker diarization beyond basic source labeling (Phase 3 - via SpeakerKit)
 - ❌ Storage/persistence (Phase 4)
 - ❌ AI summaries (Phase 5)
 - ❌ Transcript window/UI
@@ -212,13 +212,16 @@ Phase 1 focuses purely on audio capture infrastructure. The following are intent
 
 ## Next Steps
 
-To proceed with Phase 2 (Transcription):
+Phase 2 (Transcription) is complete! See `PHASE2_SUMMARY.md`.
 
-1. Install MLX Whisper or faster-whisper Python package
-2. Create WhisperEngine.swift to interface with transcription
-3. Create TranscriptionManager.swift to orchestrate
-4. Add TranscriptView UI to display results
-5. Wire up AudioMixer output to transcription pipeline
+To proceed with Phase 3 (Speaker Diarization):
+
+1. Add SpeakerKit dependency to Package.swift
+2. Create SpeakerKitManager.swift actor for diarization
+3. Integrate with TranscriptionManager to identify multiple speakers in system audio
+4. Update UI to show Speaker 1, Speaker 2, etc. instead of just "Others"
+
+> **Note**: SpeakerKit is 100% native Swift - no Python or pyannote required!
 
 ## Success Criteria: ✅ ALL MET
 

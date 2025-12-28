@@ -16,5 +16,8 @@ enum Log {
     
     /// Permission requests and status
     static let permissions = Logger(subsystem: "com.meetingtranscriber", category: "Permissions")
+    
+    /// Transcription engine and results
+    static let transcription = Logger(subsystem: "com.meetingtranscriber", category: "Transcription")
 }
 

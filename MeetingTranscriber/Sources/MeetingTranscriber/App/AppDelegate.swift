@@ -17,8 +17,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private let microphoneManager = MicrophoneManager()
     private let audioMixer = AudioMixer()
     
+    // Transcription
+    private let transcriptionManager = TranscriptionManager()
+    private var transcriptWindowController: TranscriptWindowController?
+    
     // Recording state
     @Published private(set) var isRecording = false
+    private var isStarting = false
     private var mixedAudioTask: Task<Void, Never>?
     
     // MARK: - App Delegate Methods
@@ -32,10 +37,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup notification center delegate and register categories
         setupNotifications()
         
+        // Initialize transcript window controller
+        transcriptWindowController = TranscriptWindowController(transcriptionManager: transcriptionManager)
+        
         // Request permissions FIRST, then start monitoring
         // This prevents race condition where permission dialogs briefly activate the mic
         Task {
             await Permissions.requestAllPermissions()
+            
+            // Pre-load transcription model in the background so "Start Recording" is instant
+            Log.transcription.info("Pre-loading transcription model...")
+            try? await self.transcriptionManager.start()
+            // Stop immediately so we're not "recording" but the model remains loaded in WhisperEngine
+            await self.transcriptionManager.stop()
+            Log.transcription.info("Transcription model pre-loaded and ready")
             
             // Small delay to let permission dialogs settle
             try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
@@ -92,6 +107,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 await stopRecording()
             }
         }
+        
+        // Close transcript window
+        transcriptWindowController?.closeWindow()
     }
     
     // MARK: - Menu Bar Setup
@@ -165,14 +183,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Recording Control
     
     private func startRecording() async {
-        guard !isRecording else {
-            Log.ui.warning("Start recording called but already recording")
+        guard !isRecording && !isStarting else {
+            Log.ui.warning("Start recording called but already recording or starting")
             return
         }
         
         Log.ui.info("Starting recording")
+        isStarting = true
         
         do {
+            // Start transcription system
+            try await transcriptionManager.start()
+            
             // Start screen capture
             let systemStream = try await screenCaptureManager.startCapture()
             
@@ -182,17 +204,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Start mixing
             let mixedStream = await audioMixer.startMixing(system: systemStream, microphone: micStream)
             
-            // Process mixed audio (for now just log it, later will transcribe)
+            // Process mixed audio and send to transcription
             mixedAudioTask = Task {
                 for await chunk in mixedStream {
-                    // TODO: Send to transcription in Phase 2
-                    // For now, just verify we're receiving audio
-                    Log.audio.debug("Received chunk from \(chunk.speakerLabel, privacy: .public): \(chunk.buffer.samples.count) samples")
+                    // Send to transcription (removed debug log to reduce spam)
+                    await transcriptionManager.processAudioChunk(chunk)
                 }
             }
             
             isRecording = true
+            isStarting = false
             updateMenu()
+            updateTranscriptWindow()
             
             // Update menu bar icon to show recording state
             if let button = statusItem?.button {
@@ -203,6 +226,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             
         } catch {
             Log.ui.error("Failed to start recording: \(error.localizedDescription)")
+            isStarting = false
             
             // Show error alert
             await showErrorAlert(error)
@@ -221,6 +245,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         mixedAudioTask?.cancel()
         mixedAudioTask = nil
         
+        // Stop transcription
+        await transcriptionManager.stop()
+        
         // Stop mixer
         await audioMixer.stopMixing()
         
@@ -230,6 +257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         
         isRecording = false
         updateMenu()
+        updateTranscriptWindow()
         
         // Update menu bar icon to show idle state
         if let button = statusItem?.button {
@@ -237,6 +265,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         
         Log.ui.info("Recording stopped")
+    }
+    
+    /// Update the transcript window with current state
+    private func updateTranscriptWindow() {
+        transcriptWindowController?.showWindow(isRecording: isRecording, toggleAction: { [weak self] in
+            Task { @MainActor in
+                self?.toggleRecording()
+            }
+        })
     }
     
     // MARK: - Microphone Monitoring
@@ -256,9 +293,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
     
     private func handleMicrophoneActivation() async {
-        // Don't prompt if already recording
-        guard !isRecording else {
-            Log.detection.debug("Microphone activated but already recording")
+        // Don't prompt if already recording or in the process of starting
+        guard !isRecording && !isStarting else {
+            Log.detection.debug("Microphone activated but already recording or starting")
             return
         }
         
