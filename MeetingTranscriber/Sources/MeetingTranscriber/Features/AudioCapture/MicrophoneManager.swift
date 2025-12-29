@@ -37,6 +37,17 @@ actor MicrophoneManager {
         audioEngine = engine
         
         let inputNode = engine.inputNode
+        
+        // IMPORTANT: Disable voice processing to prevent "tin can" audio quality
+        // Voice processing applies echo cancellation and noise suppression that
+        // degrades system audio quality for the user
+        do {
+            try inputNode.setVoiceProcessingEnabled(false)
+            Log.capture.info("Voice processing disabled on microphone input")
+        } catch {
+            Log.capture.warning("Could not disable voice processing: \(error.localizedDescription)")
+        }
+        
         let inputFormat = inputNode.outputFormat(forBus: 0)
         
         Log.capture.info("Microphone input format - Sample Rate: \(inputFormat.sampleRate)Hz, Channels: \(inputFormat.channelCount)")

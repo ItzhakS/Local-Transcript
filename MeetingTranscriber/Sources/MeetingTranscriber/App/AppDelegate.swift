@@ -115,23 +115,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Menu Bar Setup
     
     private func setupMenuBar() {
-        // Create status item in menu bar
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Use squareLength to ensure the icon space is reserved and never collapses
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         
         guard let statusItem = statusItem else {
             Log.ui.error("Failed to create status item")
             return
         }
         
-        // Set icon (using SF Symbol)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "MeetingTranscriber")
-        }
+        // Set initial icon using original SF Symbols that worked earlier
+        setMenuBarIcon(recording: false)
         
         // Create menu
         updateMenu()
         
         Log.ui.info("Menu bar setup complete")
+    }
+    
+    /// Set the menu bar icon based on recording state
+    private func setMenuBarIcon(recording: Bool) {
+        guard let button = statusItem?.button else { return }
+        
+        // Use standard symbols that are known to work well in menu bars
+        let symbolName = recording ? "record.circle.fill" : "waveform.circle"
+        
+        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: recording ? "Recording" : "MeetingTranscriber") {
+            image.isTemplate = true // Ensures it adapts to light/dark mode
+            button.image = image
+            button.title = "" // Ensure only image is shown
+        } else {
+            // Text fallback
+            button.image = nil
+            button.title = recording ? "●" : "○"
+        }
     }
     
     private func updateMenu() {
@@ -214,13 +230,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             
             isRecording = true
             isStarting = false
+            
+            // Update UI
+            setMenuBarIcon(recording: true)
             updateMenu()
             updateTranscriptWindow()
-            
-            // Update menu bar icon to show recording state
-            if let button = statusItem?.button {
-                button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Recording")
-            }
             
             Log.ui.info("Recording started successfully")
             
@@ -256,13 +270,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         await microphoneManager.stopCapture()
         
         isRecording = false
-        updateMenu()
-        updateTranscriptWindow()
         
         // Update menu bar icon to show idle state
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "MeetingTranscriber")
-        }
+        setMenuBarIcon(recording: false)
+        
+        updateMenu()
+        updateTranscriptWindow()
         
         Log.ui.info("Recording stopped")
     }

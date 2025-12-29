@@ -22,6 +22,9 @@ class TranscriptWindowController {
     
     /// Show the transcript window
     func showWindow(isRecording: Bool, toggleAction: @escaping () -> Void) {
+        // For menu bar apps, we need to activate the app first
+        NSApp.activate(ignoringOtherApps: true)
+        
         if let existingWindow = window {
             // Update the view content if window already exists
             let contentView = TranscriptView(
@@ -31,7 +34,9 @@ class TranscriptWindowController {
             )
             existingWindow.contentView = NSHostingView(rootView: contentView)
             
-            existingWindow.makeKeyAndOrderFront(nil)
+            // Ensure window is visible and in front
+            existingWindow.orderFrontRegardless()
+            existingWindow.makeKey()
             Log.ui.debug("Bringing existing transcript window to front")
             return
         }
@@ -56,8 +61,9 @@ class TranscriptWindowController {
         newWindow.center()
         newWindow.setFrameAutosaveName("TranscriptWindow")
         
-        // Make window appear
-        newWindow.makeKeyAndOrderFront(nil)
+        // For menu bar apps, use orderFrontRegardless to ensure visibility
+        newWindow.orderFrontRegardless()
+        newWindow.makeKey()
         
         // Handle window close
         let delegate = WindowDelegate { [weak self] in

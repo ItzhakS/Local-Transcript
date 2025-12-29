@@ -21,6 +21,7 @@ class TranscriptionManager: ObservableObject {
     private var accumulators: [String: [Float]] = [:]
     private var lastChunkTimes: [String: Date] = [:]
     private var lastSpeechTimes: [String: Date] = [:] // Track last time we actually heard speech
+    private var speechDetectedInCurrentBuffer: [String: Bool] = [:] // Track if speech was heard since last flush
     private let bufferDuration: TimeInterval = 5.0  // Increased to 5s for better context
     private let silenceTimeout: TimeInterval = 1.5  // Flush buffer after 1.5s of silence
     private let overlapDuration: TimeInterval = 0.5 // Keep 500ms of overlap between continuous flushes
@@ -104,6 +105,7 @@ class TranscriptionManager: ObservableObject {
         if accumulators[speaker] == nil {
             accumulators[speaker] = []
             lastSpeechTimes[speaker] = now
+            speechDetectedInCurrentBuffer[speaker] = false
         }
         
         // ALWAYS accumulate audio. Whisper needs silence for context, 
@@ -115,6 +117,7 @@ class TranscriptionManager: ObservableObject {
         let hasSpeech = detectSpeech(in: chunk.buffer.samples)
         if hasSpeech {
             lastSpeechTimes[speaker] = now
+            speechDetectedInCurrentBuffer[speaker] = true
         }
         
         // Check for silence timeout (no speech for X seconds)
@@ -126,12 +129,12 @@ class TranscriptionManager: ObservableObject {
         // Flush logic
         if silenceDetected && accumulatedDuration >= 1.0 {
             // End of sentence/speech segment - flush everything
-            Log.transcription.debug("Flushing buffer for \(speaker, privacy: .public) due to silence (\(String(format: "%.1f", silenceDuration), privacy: .public)s)")
+            Log.transcription.debug("Flushing buffer for \(speaker, privacy: .public) due to silence")
             await flushBuffer(for: speaker, keepOverlap: false)
             lastSpeechTimes[speaker] = now // Reset silence timer after flush
         } else if accumulatedDuration >= bufferDuration {
             // Buffer full during continuous speech - flush with overlap to prevent word clipping
-            Log.transcription.info("Buffer duration threshold reached for \(speaker, privacy: .public), flushing with overlap")
+            Log.transcription.debug("Buffer duration threshold reached for \(speaker, privacy: .public), flushing with overlap")
             await flushBuffer(for: speaker, keepOverlap: true)
         }
     }
@@ -151,6 +154,25 @@ class TranscriptionManager: ObservableObject {
         guard let samples = accumulators[speaker], !samples.isEmpty else {
             return
         }
+        
+        let hasSpeech = speechDetectedInCurrentBuffer[speaker] ?? false
+        
+        // If no speech was detected in this entire window, just clear/overlap and exit
+        guard hasSpeech else {
+            if keepOverlap {
+                // Keep the tail for continuity even if it was silent
+                let overlapSamplesCount = Int(overlapDuration * Double(sampleRate))
+                if samples.count > overlapSamplesCount {
+                    accumulators[speaker] = Array(samples.suffix(overlapSamplesCount))
+                }
+            } else {
+                accumulators[speaker] = []
+            }
+            return
+        }
+        
+        // Reset speech flag for the next segment
+        speechDetectedInCurrentBuffer[speaker] = false
         
         let duration = Double(samples.count) / Double(sampleRate)
         
@@ -212,6 +234,14 @@ class TranscriptionManager: ObservableObject {
                 return
             }
             
+            // Filter out common Whisper meta-tags and noise
+            let forbiddenTokens = ["[blank_audio]", "[skip]", "[noise]", "[laughter]", "[vocalized-noise]", "[unintelligible]"]
+            let lowerText = result.text.lowercased()
+            if forbiddenTokens.contains(where: { lowerText.contains($0) }) || result.text.trimmingCharacters(in: .punctuationCharacters).isEmpty {
+                Log.transcription.debug("Filtering Whisper meta-tag or empty punctuation from \(speaker, privacy: .public): \"\(result.text, privacy: .public)\"")
+                return
+            }
+            
             // Reconcile text overlap to prevent duplication in the UI
             var finalResultText = result.text
             
@@ -253,32 +283,40 @@ class TranscriptionManager: ObservableObject {
     /// Reconciles text overlap between segments to prevent duplication.
     /// This looks for shared words at the boundary of two segments.
     private func reconcile(newText: String, with previousText: String) -> String {
-        let newWords = newText.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        let prevWords = previousText.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        // Clean words for comparison (remove punctuation, lowercase)
+        func cleanWords(_ text: String) -> [String] {
+            text.lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+                .filter { !$0.isEmpty }
+        }
         
-        // We look for a match in the last 10 words of the previous segment
-        // and the first 10 words of the new segment (increased from 5 for better matching)
-        let lookbackCount = min(10, prevWords.count)
-        let lookaheadCount = min(10, newWords.count)
+        let newWordsClean = cleanWords(newText)
+        let prevWordsClean = cleanWords(previousText)
+        
+        // We look for a match in the last 12 words of the previous segment
+        // and the first 12 words of the new segment
+        let lookbackCount = min(12, prevWordsClean.count)
+        let lookaheadCount = min(12, newWordsClean.count)
         
         guard lookbackCount > 0 && lookaheadCount > 0 else { return newText }
         
-        // Try to find the longest matching sequence of words
+        // Try to find the longest matching sequence of words at the boundary
         for length in (1...min(lookbackCount, lookaheadCount)).reversed() {
-            let suffix = prevWords.suffix(length)
-            let prefix = newWords.prefix(length)
+            let suffix = prevWordsClean.suffix(length)
+            let prefix = newWordsClean.prefix(length)
             
             if Array(suffix) == Array(prefix) {
                 // Found a match! Reconstruct the new text without the overlap
-                // We use the original newText to preserve case/punctuation, but split into words
                 let originalNewWords = newText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-                if originalNewWords.count > length {
-                    let reconciledWords = originalNewWords.dropFirst(length)
-                    return reconciledWords.joined(separator: " ")
-                } else {
-                    // The entire new segment was a duplicate
+                
+                // If it's a perfect match of the whole segment, it's a duplicate
+                if originalNewWords.count <= length {
                     return ""
                 }
+                
+                let reconciledWords = originalNewWords.dropFirst(length)
+                return reconciledWords.joined(separator: " ")
             }
         }
         

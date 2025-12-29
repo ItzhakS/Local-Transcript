@@ -44,7 +44,9 @@ actor ScreenCaptureManager: NSObject {
         // Create filter for display-wide capture (excluding no windows means capturing all)
         let filter = SCContentFilter(display: display, excludingWindows: [])
         
-        // Configure stream for audio-only capture
+        // Configure stream for audio-only capture at 16kHz (Whisper requirement)
+        // Note: The "tin can" audio effect was caused by AVAudioEngine voice processing,
+        // not by ScreenCaptureKit sample rate. We've disabled voice processing in MicrophoneManager.
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
@@ -55,6 +57,8 @@ actor ScreenCaptureManager: NSObject {
         config.width = 2
         config.height = 2
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        
+        Log.capture.info("ScreenCaptureKit configured for 16kHz mono capture")
         
         // Create the stream
         stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -133,16 +137,9 @@ extension ScreenCaptureManager: SCStreamOutput {
     }
     
     private func processSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
-        // Extract audio buffer from sample buffer
+        // Convert CMSampleBuffer to AudioBuffer
         guard let audioBuffer = convertToAudioBuffer(sampleBuffer) else {
-            Log.audio.warning("Failed to convert sample buffer to audio buffer")
             return
-        }
-        
-        // Only log non-silence audio to reduce log spam
-        let energy = audioBuffer.samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, audioBuffer.samples.count))
-        if energy > 1e-6 {
-            Log.audio.info("ScreenCapture: Produced buffer with \(audioBuffer.samples.count) samples, Energy: \(energy, privacy: .public)")
         }
         
         // Send to continuation
@@ -151,50 +148,84 @@ extension ScreenCaptureManager: SCStreamOutput {
     
     /// Convert CMSampleBuffer to AudioBuffer
     private func convertToAudioBuffer(_ sampleBuffer: CMSampleBuffer) -> AudioBuffer? {
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-            Log.audio.error("Failed to get data buffer from sample buffer")
+        // Extract format description
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee else {
             return nil
         }
         
-        // Get format description
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
-            Log.audio.error("Failed to get format description")
-            return nil
+        // ScreenCaptureKit provides audio in various formats.
+        // We need to handle both Float32 and Int16 formats robustly.
+        
+        var audioBufferList = AudioBufferList()
+        var blockBuffer: CMBlockBuffer?
+        
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: &audioBufferList,
+            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        
+        guard status == noErr else { return nil }
+        
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        if frameCount == 0 { return nil }
+        
+        let channels = Int(streamDescription.mChannelsPerFrame)
+        let isFloat = (streamDescription.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let wordSize = Int(streamDescription.mBitsPerChannel / 8)
+        
+        var samples = [Float]()
+        samples.reserveCapacity(Int(frameCount))
+        
+        let bufferListPtr = UnsafeMutableAudioBufferListPointer(&audioBufferList)
+        
+        // Simple mono extraction
+        if isFloat {
+            // Float32
+            if let mData = bufferListPtr[0].mData {
+                let floatPtr = mData.assumingMemoryBound(to: Float.self)
+                samples = Array(UnsafeBufferPointer(start: floatPtr, count: Int(frameCount) * channels))
+            }
+        } else {
+            // Int16 (pcmFormatInt16)
+            if let mData = bufferListPtr[0].mData {
+                let int16Ptr = mData.assumingMemoryBound(to: Int16.self)
+                let int16Samples = UnsafeBufferPointer(start: int16Ptr, count: Int(frameCount) * channels)
+                samples = int16Samples.map { Float($0) / 32768.0 }
+            }
         }
         
-        let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee
-        guard let streamDescription = asbd else {
-            Log.audio.error("Failed to get stream description")
-            return nil
+        if samples.isEmpty { return nil }
+        
+        // Convert to mono if needed
+        var finalSamples = samples
+        if channels > 1 {
+            let monoCount = samples.count / channels
+            var monoSamples = [Float](repeating: 0, count: monoCount)
+            for i in 0..<monoCount {
+                var sum: Float = 0
+                for j in 0..<channels {
+                    sum += samples[i * channels + j]
+                }
+                monoSamples[i] = sum / Float(channels)
+            }
+            finalSamples = monoSamples
         }
-        
-        // Get audio data
-        var length: Int = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-        
-        guard status == kCMBlockBufferNoErr, let pointer = dataPointer else {
-            Log.audio.error("Failed to get data pointer from block buffer")
-            return nil
-        }
-        
-        // Convert to Float samples
-        let samples = convertToFloatSamples(pointer: pointer, length: length, format: streamDescription)
         
         return AudioBuffer(
-            samples: samples,
+            samples: finalSamples,
             sampleRate: Int(streamDescription.mSampleRate),
             timestamp: Date(),
             source: .system
         )
     }
     
-    /// Convert raw audio data to Float samples
-    private func convertToFloatSamples(pointer: UnsafeMutablePointer<Int8>, length: Int, format: AudioStreamBasicDescription) -> [Float] {
-        let sampleCount = length / MemoryLayout<Float>.size
-        let floatPointer = pointer.withMemoryRebound(to: Float.self, capacity: sampleCount) { $0 }
-        let buffer = UnsafeBufferPointer(start: floatPointer, count: sampleCount)
-        return Array(buffer)
-    }
+    // Remove the old conversion methods
 }
 
