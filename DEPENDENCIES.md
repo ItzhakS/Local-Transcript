@@ -20,32 +20,32 @@ ollama pull llama3.1:8b      # Better quality
 ollama pull mistral:7b       # Good balance
 ```
 
-### 3. WhisperKit Models (Auto-Downloaded)
+### 3. FluidAudio Models (Auto-Downloaded)
 
-WhisperKit models are automatically downloaded on first use. They are cached in:
+FluidAudio models are automatically downloaded on first use from HuggingFace. They are cached in:
 ```
-~/Library/Caches/whisperkit/
+~/.cache/huggingface/hub/
 ```
 
-Available models (specified in code):
-- `tiny` - Fastest, lowest quality (~75MB)
-- `base` - Good for real-time (~150MB) **← Default**
-- `small` - Balanced (~500MB)
-- `medium` - High quality (~1.5GB)
-- `large-v3` - Best quality (~3GB)
+Available ASR models:
+- **Parakeet TDT v3** - Multilingual (25 European languages) (~0.6b parameters) **← Default**
+- **Parakeet TDT v2** - English-only with higher recall (~0.6b parameters)
 
-To pre-download a model:
+Available VAD models:
+- **Silero VAD** - Voice activity detection (auto-downloaded)
+
+Available Diarization models:
+- **Pyannote Segmentation 3.0** - Speaker segmentation (auto-downloaded)
+- **WeSpeaker** - Speaker embeddings (auto-downloaded)
+
+To pre-download models:
 ```bash
-# Models download automatically when WhisperKit initializes
+# Models download automatically when FluidAudio initializes
 # No manual setup required!
 ```
 
-### 4. SpeakerKit (for Speaker Diarization)
-
-SpeakerKit is a native Swift package - no setup required. Models (~10MB) download automatically.
-
 > **Note**: Python environment, pyannote-audio, and HuggingFace tokens are **NOT required**. 
-> The entire transcription + diarization pipeline is 100% native Swift.
+> The entire transcription + diarization pipeline is 100% native Swift, optimized for Apple Neural Engine.
 
 ---
 
@@ -66,11 +66,8 @@ let package = Package(
         .executable(name: "MeetingTranscriber", targets: ["MeetingTranscriber"])
     ],
     dependencies: [
-        // Transcription - Native Swift Whisper
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
-        
-        // Speaker Diarization - Native Swift (add when ready for Phase 3)
-        // .package(url: "https://github.com/argmaxinc/SpeakerKit.git", from: "0.1.0"),
+        // Audio AI - Native Swift ASR, VAD, Diarization
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.1.0"),
         
         // Database
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0"),
@@ -82,8 +79,7 @@ let package = Package(
         .executableTarget(
             name: "MeetingTranscriber",
             dependencies: [
-                .product(name: "WhisperKit", package: "WhisperKit"),
-                // .product(name: "SpeakerKit", package: "SpeakerKit"),  // Add for Phase 3
+                .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 "KeychainAccess",
             ],
@@ -157,7 +153,7 @@ sox -n test_tone.wav synth 10 sine 440
 ### Simulating Multiple Speakers (Phase 3)
 1. Open two browser tabs with different YouTube videos
 2. Play both at low volume
-3. Capture browser audio - SpeakerKit will identify distinct speakers
+3. Capture browser audio - FluidAudio DiarizerManager will identify distinct speakers
 4. Each speaker will be labeled (Speaker 1, Speaker 2, etc.)
 
 ---
@@ -193,9 +189,9 @@ ollama list
 ```
 
 ### High CPU usage during transcription
-- Use smaller Whisper model (tiny or base for real-time)
-- Increase VAD aggressiveness to reduce transcription calls
-- Check Activity Monitor for which process is consuming CPU
+- Should be minimal - FluidAudio uses Apple Neural Engine (ANE) for inference
+- Preprocessing runs on CPU, but main ASR inference is ANE-optimized
+- Check Activity Monitor - if CPU is high, check Console.app for errors
 
 ---
 
@@ -206,7 +202,8 @@ For best experience:
 - **Recommended**: M1 Pro/Max or M2+ with 16GB RAM
 - **Storage**: ~5GB free for models
 
-Performance expectations (M1 Pro, whisper-small):
+Performance expectations (M4 Pro, Parakeet TDT v3):
 - Transcription latency: 1-2 seconds
-- CPU usage: 15-25% during active transcription
-- Memory: 1-1.5GB total app footprint
+- Real-time factor: ~190x (1 hour of audio in ~19 seconds)
+- CPU usage: Minimal (ANE handles inference)
+- Memory: 1.5-2GB total app footprint

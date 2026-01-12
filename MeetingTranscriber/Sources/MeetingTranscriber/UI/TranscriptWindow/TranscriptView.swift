@@ -174,8 +174,52 @@ struct TranscriptEntryRow: View {
         .cornerRadius(8)
     }
     
+    /// Returns a color for the speaker based on their label
     private var speakerColor: Color {
-        entry.speaker == "Me" ? .blue : .green
+        SpeakerColorManager.color(for: entry.speaker)
+    }
+}
+
+/// Manages consistent colors for speakers across the UI
+enum SpeakerColorManager {
+    /// Color palette for speakers
+    private static let speakerColors: [Color] = [
+        .green,   // Speaker 1
+        .orange,  // Speaker 2
+        .purple,  // Speaker 3
+        .pink,    // Speaker 4
+        .teal,    // Speaker 5
+        .indigo,  // Speaker 6
+        .mint,    // Speaker 7
+        .cyan,    // Speaker 8
+    ]
+    
+    /// Returns a color for the given speaker label
+    static func color(for speaker: String) -> Color {
+        // "Me" always gets blue
+        if speaker == "Me" {
+            return .blue
+        }
+        
+        // "Others" (fallback when diarization not available) gets green
+        if speaker == "Others" {
+            return .green
+        }
+        
+        // For "Speaker N" labels, extract the number and assign color from palette
+        if speaker.hasPrefix("Speaker ") {
+            if let numberStr = speaker.components(separatedBy: " ").last,
+               let number = Int(numberStr) {
+                // Use modulo to cycle through colors if more than palette size
+                let colorIndex = (number - 1) % speakerColors.count
+                return speakerColors[colorIndex]
+            }
+        }
+        
+        // For custom speaker names, generate a consistent color based on hash
+        let hash = abs(speaker.hashValue)
+        let colorIndex = hash % speakerColors.count
+        return speakerColors[colorIndex]
     }
 }
 

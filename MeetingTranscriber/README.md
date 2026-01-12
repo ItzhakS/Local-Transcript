@@ -14,22 +14,22 @@ A native macOS menu bar app that captures system audio and microphone input, tra
 - ✅ **Audio mixing** - Combines system and mic audio with speaker labels ("Me" / "Others")
 
 ### Phase 2 (Complete)
-- ✅ **Real-time transcription** - Uses WhisperKit (CoreML-optimized for Apple Silicon)
+- ✅ **Real-time transcription** - Uses FluidAudio ASR (AsrManager/StreamingEouAsrManager)
 - ✅ **Live transcript window** - Displays transcription as it happens
 - ✅ **Speaker labeling** - "Me" for microphone, "Others" for system audio
 - ✅ **Confidence scoring** - Visual indicators for transcription quality
-- ✅ **Voice Activity Detection** - Only transcribes speech, ignores silence
+- ✅ **Voice Activity Detection** - Uses FluidAudio VadManager for accurate speech detection
 - ✅ **Smart buffering** - 3-second segments with speaker change detection
 
 ### Coming in Future Phases
-- 🔄 Advanced speaker diarization via SpeakerKit (Phase 3) - Native Swift, no Python
+- 🔄 Advanced speaker diarization via FluidAudio DiarizerManager (Phase 3) - Native Swift, ANE-optimized
 - 🔄 Storage and history (Phase 4)
 - 🔄 AI summaries via Ollama (Phase 5)
 
 ## Requirements 📋
 
-- **macOS**: 13.0 (Ventura) or later
-- **Hardware**: Apple Silicon (M1/M2/M3) recommended
+- **macOS**: 14.0 (Sonoma) or later (required for FluidAudio)
+- **Hardware**: Apple Silicon only (M1/M2/M3/M4) - required for Apple Neural Engine access
 - **Xcode**: 15.0+ (for building)
 - **Swift**: 5.9+
 
@@ -139,8 +139,8 @@ You can test the app without joining a real meeting:
 4. Verify speaker detection works correctly
 
 ### First Recording Note:
-- The first time you start recording, WhisperKit will download the transcription model (~150MB)
-- This happens automatically in the background
+- The first time you start recording, FluidAudio will download the ASR model (Parakeet TDT v3 ~0.6b parameters)
+- Models are automatically downloaded from HuggingFace in the background
 - Subsequent recordings will be instant
 
 ## Troubleshooting 🔧
@@ -209,8 +209,8 @@ MeetingTranscriber/
 │   │   │   ├── MicrophoneManager.swift     # Mic capture
 │   │   │   └── AudioMixer.swift            # Combines streams
 │   │   ├── Transcription/                  # ⭐ NEW in Phase 2
-│   │   │   ├── WhisperEngine.swift         # WhisperKit wrapper
-│   │   │   └── TranscriptionManager.swift  # Audio buffering + VAD
+│   │   │   ├── FluidAudioEngine.swift      # FluidAudio ASR wrapper
+│   │   │   └── TranscriptionManager.swift  # Audio buffering + FluidAudio VAD
 │   │   └── MeetingDetection/
 │   │       └── MicrophoneActivityMonitor.swift  # Auto-detection
 │   ├── UI/
@@ -262,7 +262,7 @@ Example logs:
 
 Phase 2 provides real-time transcription with basic speaker labeling. Next phases will add:
 
-- **Phase 3**: Advanced speaker diarization via **SpeakerKit** (native Swift, no Python required) to identify multiple speakers in system audio
+- **Phase 3**: Advanced speaker diarization via **FluidAudio DiarizerManager** (native Swift, ANE-optimized) to identify multiple speakers in system audio
 - **Phase 4**: Storage, search, and meeting history via GRDB.swift
 - **Phase 5**: AI-powered summaries and action items via Ollama
 
@@ -302,8 +302,8 @@ See `PHASE2_SUMMARY.md` for detailed Phase 2 implementation notes.
 └────────┬──────────────────────┘
          │
 ┌────────▼──────────────────────┐
-│      WhisperEngine             │
-│  • WhisperKit (CoreML)         │
+│      FluidAudioEngine          │
+│  • FluidAudio ASR (ANE)        │
 │  • Real-time transcription     │
 └────────┬──────────────────────┘
          │
@@ -320,8 +320,10 @@ See `PHASE2_SUMMARY.md` for detailed Phase 2 implementation notes.
 Built with:
 - Swift 5.9+, SwiftUI
 - ScreenCaptureKit (system audio), AVFoundation (microphone)
-- [WhisperKit](https://github.com/argmaxinc/WhisperKit) - Native Swift transcription
-- [SpeakerKit](https://github.com/argmaxinc/SpeakerKit) - Native Swift diarization (Phase 3)
+- [FluidAudio](https://github.com/FluidInference/FluidAudio) - Native Swift on-device audio AI (ASR, VAD, Diarization)
+- [FluidAudio Documentation](https://deepwiki.com/FluidInference/FluidAudio) - Comprehensive API reference
+
+> **Note**: ScreenCaptureKit is still required for audio capture. FluidAudio processes audio but does not capture it.
 
 ---
 

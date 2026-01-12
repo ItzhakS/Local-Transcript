@@ -1,6 +1,6 @@
 import Foundation
 
-/// Orchestrates transcription of audio streams with buffering and VAD
+/// Orchestrates transcription of audio streams with buffering, VAD, and speaker diarization
 @MainActor
 class TranscriptionManager: ObservableObject {
     
@@ -12,10 +12,18 @@ class TranscriptionManager: ObservableObject {
     /// Whether transcription is currently active
     @Published private(set) var isTranscribing = false
     
+    /// Active speakers (from diarization)
+    @Published private(set) var activeSpeakers: [Int: String] = [:]
+    
     // MARK: - Private Properties
     
     private let whisperEngine: WhisperEngine
     private var pendingTasks: Set<Task<Void, Never>> = []
+    
+    // Diarization components
+    private var diarizer: FluidAudioDiarizer?
+    private let speakerIdentifier = SpeakerIdentifier()
+    private var isDiarizationEnabled = true
     
     // Audio buffering (separate buffers for each speaker to avoid flickering flushes)
     private var accumulators: [String: [Float]] = [:]
@@ -32,9 +40,22 @@ class TranscriptionManager: ObservableObject {
     
     // MARK: - Initialization
     
-    init(modelName: String = "base") {
+    init(modelName: String = "base", diarizer: FluidAudioDiarizer? = nil) {
         self.whisperEngine = WhisperEngine(modelName: modelName)
-        Log.transcription.info("TranscriptionManager initialized with model: \(modelName, privacy: .public)")
+        self.diarizer = diarizer
+        Log.transcription.info("TranscriptionManager initialized with model: \(modelName, privacy: .public), diarization: \(diarizer != nil)")
+    }
+    
+    /// Set the diarizer after initialization
+    func setDiarizer(_ diarizer: FluidAudioDiarizer?) {
+        self.diarizer = diarizer
+        Log.transcription.info("Diarizer \(diarizer != nil ? "enabled" : "disabled")")
+    }
+    
+    /// Enable or disable diarization
+    func setDiarizationEnabled(_ enabled: Bool) {
+        isDiarizationEnabled = enabled
+        Log.transcription.info("Diarization \(enabled ? "enabled" : "disabled")")
     }
     
     // MARK: - Lifecycle
@@ -51,11 +72,27 @@ class TranscriptionManager: ObservableObject {
         // Load the Whisper model
         try await whisperEngine.loadModel()
         
+        // Start diarization if available
+        if let diarizer = diarizer, isDiarizationEnabled {
+            do {
+                try await diarizer.start()
+                Log.transcription.info("Diarization started")
+            } catch {
+                Log.transcription.warning("Failed to start diarization, falling back to 'Others' label: \(error.localizedDescription, privacy: .public)")
+                // Continue without diarization - will fall back to "Others" label
+            }
+        }
+        
+        // Reset speaker identifier for new recording
+        await speakerIdentifier.reset()
+        
         // Reset state
         accumulators = [:]
         lastChunkTimes = [:]
         lastSpeechTimes = [:]
+        speechDetectedInCurrentBuffer = [:]
         transcriptEntries = []
+        activeSpeakers = [:]
         
         isTranscribing = true
         Log.transcription.info("Transcription system started")
@@ -85,8 +122,43 @@ class TranscriptionManager: ObservableObject {
         }
         Log.transcription.debug("All pending tasks completed")
         
+        // Stop diarization
+        if let diarizer = diarizer {
+            await diarizer.stop()
+            Log.transcription.info("Diarization stopped")
+        }
+        
         isTranscribing = false
         Log.transcription.info("Transcription system stopped")
+    }
+    
+    /// Perform offline refinement of speaker labels (optional, call after recording stops)
+    func refineOfflineDiarization() async {
+        guard let diarizer = diarizer else {
+            Log.transcription.warning("No diarizer available for offline refinement")
+            return
+        }
+        
+        Log.transcription.info("Starting offline diarization refinement...")
+        
+        do {
+            let refinedSegments = try await diarizer.refineOffline()
+            
+            // Update speaker labels based on refined segments
+            await speakerIdentifier.updateFromSegments(refinedSegments)
+            
+            // Update active speakers
+            activeSpeakers = await speakerIdentifier.getActiveSpeakers()
+            
+            Log.transcription.info("Offline refinement complete with \(refinedSegments.count) segments")
+            
+            // Note: To fully update transcript entries with refined labels,
+            // you would need to re-process the segments and match them with existing entries.
+            // This is a more complex operation that could be added in a future enhancement.
+            
+        } catch {
+            Log.transcription.error("Offline refinement failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
     
     // MARK: - Audio Processing
@@ -98,8 +170,28 @@ class TranscriptionManager: ObservableObject {
             return
         }
         
-        let speaker = chunk.speakerLabel
+        var speaker = chunk.speakerLabel
         let now = Date()
+        
+        // For system audio ("Others"), run diarization to identify specific speakers
+        if speaker == "Others" && isDiarizationEnabled, let diarizer = diarizer {
+            do {
+                // Get dominant speaker for this chunk
+                if let speakerId = try await diarizer.getDominantSpeaker(for: chunk.buffer) {
+                    // Get speaker label from identifier
+                    speaker = await speakerIdentifier.getLabel(for: speakerId)
+                    
+                    // Update active speakers list
+                    activeSpeakers = await speakerIdentifier.getActiveSpeakers()
+                    
+                    Log.diarization.debug("Identified speaker \(speakerId) -> '\(speaker, privacy: .public)'")
+                }
+                // If no speaker detected, keep "Others" label
+            } catch {
+                Log.diarization.warning("Diarization failed, using 'Others' label: \(error.localizedDescription, privacy: .public)")
+                // Fall back to "Others" on error
+            }
+        }
         
         // Initialize state for speaker if needed
         if accumulators[speaker] == nil {
@@ -187,12 +279,15 @@ class TranscriptionManager: ObservableObject {
         
         Log.transcription.info("Flushing buffer: \(samples.count) samples (\(String(format: "%.2f", duration), privacy: .public)s) from \(speaker, privacy: .public)")
         
+        // Determine audio source - "Me" is microphone, everything else is system
+        let audioSource: AudioBuffer.AudioSource = speaker == "Me" ? .microphone : .system
+        
         // Create audio buffer for transcription
         let audioBuffer = AudioBuffer(
             samples: samples,
             sampleRate: sampleRate,
             timestamp: Date(),
-            source: speaker == "Me" ? .microphone : .system
+            source: audioSource
         )
         
         // Handle overlap/cleanup

@@ -54,6 +54,12 @@ Look for this icon in your menu bar: **○~**
 2. You'll see a notification: **"Meeting detected - Start recording?"**
 3. Click the notification to start automatically
 
+### First Recording Note
+
+- The first time you start recording, FluidAudio will download the ASR model (Parakeet TDT v3)
+- Models download automatically from HuggingFace in the background
+- Subsequent recordings will be instant
+
 ## 🔍 Verify It's Working
 
 ### Check the Logs
@@ -72,13 +78,16 @@ open -a Console
 
 ## 📊 What's Happening
 
-Right now (Phase 1), the app is:
-- ✅ Capturing system audio (everything playing on your Mac)
-- ✅ Capturing microphone input (your voice)
+Right now, the app is:
+- ✅ Capturing system audio (everything playing on your Mac) via ScreenCaptureKit
+- ✅ Capturing microphone input (your voice) via AVAudioEngine
 - ✅ Mixing them together with labels ("Me" vs "Others")
-- ✅ Logging audio chunks to verify capture
+- ✅ Processing audio with FluidAudio:
+  - Voice Activity Detection (VAD) using FluidAudio VadManager
+  - Automatic Speech Recognition (ASR) using FluidAudio AsrManager
+  - Real-time transcription displayed in transcript window
 
-**Note:** Transcription is not yet implemented. Audio is captured but not transcribed.
+**Note:** Advanced speaker diarization is planned for Phase 3. Current version labels audio sources ("Me" vs "Others").
 
 ## 🧪 Test Without a Meeting
 
@@ -156,9 +165,8 @@ Key files:
 
 ## 🎉 You're All Set!
 
-The audio capture infrastructure is now ready. Next phases will add:
-- Phase 2: Transcription (Whisper)
-- Phase 3: Speaker diarization
+The audio capture and transcription infrastructure is now ready. Next phases will add:
+- Phase 3: Advanced speaker diarization (FluidAudio DiarizerManager)
 - Phase 4: Storage & history
 - Phase 5: AI summaries
 

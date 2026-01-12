@@ -17,8 +17,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private let microphoneManager = MicrophoneManager()
     private let audioMixer = AudioMixer()
     
-    // Transcription
+    // Transcription and Diarization
     private let transcriptionManager = TranscriptionManager()
+    private let diarizer = FluidAudioDiarizer()
     private var transcriptWindowController: TranscriptWindowController?
     
     // Recording state
@@ -37,6 +38,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup notification center delegate and register categories
         setupNotifications()
         
+        // Connect diarizer to transcription manager
+        transcriptionManager.setDiarizer(diarizer)
+        
         // Initialize transcript window controller
         transcriptWindowController = TranscriptWindowController(transcriptionManager: transcriptionManager)
         
@@ -51,6 +55,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Stop immediately so we're not "recording" but the model remains loaded in WhisperEngine
             await self.transcriptionManager.stop()
             Log.transcription.info("Transcription model pre-loaded and ready")
+            
+            // Pre-load diarization model
+            Log.diarization.info("Pre-loading diarization model...")
+            do {
+                try await self.diarizer.start()
+                await self.diarizer.stop()
+                Log.diarization.info("Diarization model pre-loaded and ready")
+            } catch {
+                Log.diarization.warning("Failed to pre-load diarization model: \(error.localizedDescription, privacy: .public)")
+                // Diarization will fall back to "Others" label if not available
+            }
             
             // Small delay to let permission dialogs settle
             try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds

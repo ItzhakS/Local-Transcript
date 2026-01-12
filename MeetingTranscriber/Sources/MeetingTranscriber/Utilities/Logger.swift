@@ -19,5 +19,8 @@ enum Log {
     
     /// Transcription engine and results
     static let transcription = Logger(subsystem: "com.meetingtranscriber", category: "Transcription")
+    
+    /// Speaker diarization and identification
+    static let diarization = Logger(subsystem: "com.meetingtranscriber", category: "Diarization")
 }
 

@@ -10,6 +10,7 @@ enum AppError: LocalizedError {
     case microphoneInUse
     case streamConfigurationFailed
     case transcriptionError(String)
+    case diarizationError(String)
     
     enum PermissionType {
         case screenRecording
@@ -42,6 +43,8 @@ enum AppError: LocalizedError {
             return "Failed to configure audio stream. Please try again."
         case .transcriptionError(let reason):
             return "Transcription failed: \(reason)"
+        case .diarizationError(let reason):
+            return "Speaker diarization failed: \(reason)"
         }
     }
     
@@ -66,6 +69,8 @@ enum AppError: LocalizedError {
             return "Restart the application and try again. If the problem persists, check your audio device settings."
         case .transcriptionError:
             return "Restart the application and try again. If the problem persists, check Console.app for detailed logs."
+        case .diarizationError:
+            return "Speaker identification will fall back to 'Others' label. Check Console.app for detailed logs."
         default:
             return nil
         }
