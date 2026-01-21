@@ -30,7 +30,11 @@ class TranscriptionManager: ObservableObject {
     private var lastChunkTimes: [String: Date] = [:]
     private var lastSpeechTimes: [String: Date] = [:] // Track last time we actually heard speech
     private var speechDetectedInCurrentBuffer: [String: Bool] = [:] // Track if speech was heard since last flush
-    private let bufferDuration: TimeInterval = 5.0  // Increased to 5s for better context
+    /// Soft upper bound for how long we let a single continuous segment grow before forcing a flush.
+    /// We keep this relatively high so that, in normal conversations, segments end on real pauses,
+    /// not arbitrary time limits.
+    private let maxSegmentDuration: TimeInterval = 15.0
+    /// How long of silence we wait before deciding a sentence/segment has ended.
     private let silenceTimeout: TimeInterval = 1.5  // Flush buffer after 1.5s of silence
     private let overlapDuration: TimeInterval = 0.5 // Keep 500ms of overlap between continuous flushes
     private let sampleRate: Int = 16000
@@ -40,7 +44,7 @@ class TranscriptionManager: ObservableObject {
     
     // MARK: - Initialization
     
-    init(modelName: String = "base", diarizer: FluidAudioDiarizer? = nil) {
+    init(modelName: String = "small", diarizer: FluidAudioDiarizer? = nil) {
         self.whisperEngine = WhisperEngine(modelName: modelName)
         self.diarizer = diarizer
         Log.transcription.info("TranscriptionManager initialized with model: \(modelName, privacy: .public), diarization: \(diarizer != nil)")
@@ -76,10 +80,19 @@ class TranscriptionManager: ObservableObject {
         if let diarizer = diarizer, isDiarizationEnabled {
             do {
                 try await diarizer.start()
-                Log.transcription.info("Diarization started")
+                Log.transcription.info("Diarization started successfully")
             } catch {
-                Log.transcription.warning("Failed to start diarization, falling back to 'Others' label: \(error.localizedDescription, privacy: .public)")
+                Log.transcription.error("Failed to start diarization, falling back to 'Others' label: \(error.localizedDescription, privacy: .public)")
+                Log.transcription.error("Diarization error details: \(String(describing: error), privacy: .public)")
                 // Continue without diarization - will fall back to "Others" label
+                // Disable diarization for this session to avoid repeated errors
+                isDiarizationEnabled = false
+            }
+        } else {
+            if diarizer == nil {
+                Log.transcription.warning("No diarizer available - all speakers will be labeled 'Others'")
+            } else if !isDiarizationEnabled {
+                Log.transcription.info("Diarization is disabled - all speakers will be labeled 'Others'")
             }
         }
         
@@ -173,26 +186,6 @@ class TranscriptionManager: ObservableObject {
         var speaker = chunk.speakerLabel
         let now = Date()
         
-        // For system audio ("Others"), run diarization to identify specific speakers
-        if speaker == "Others" && isDiarizationEnabled, let diarizer = diarizer {
-            do {
-                // Get dominant speaker for this chunk
-                if let speakerId = try await diarizer.getDominantSpeaker(for: chunk.buffer) {
-                    // Get speaker label from identifier
-                    speaker = await speakerIdentifier.getLabel(for: speakerId)
-                    
-                    // Update active speakers list
-                    activeSpeakers = await speakerIdentifier.getActiveSpeakers()
-                    
-                    Log.diarization.debug("Identified speaker \(speakerId) -> '\(speaker, privacy: .public)'")
-                }
-                // If no speaker detected, keep "Others" label
-            } catch {
-                Log.diarization.warning("Diarization failed, using 'Others' label: \(error.localizedDescription, privacy: .public)")
-                // Fall back to "Others" on error
-            }
-        }
-        
         // Initialize state for speaker if needed
         if accumulators[speaker] == nil {
             accumulators[speaker] = []
@@ -204,6 +197,9 @@ class TranscriptionManager: ObservableObject {
         // and we were previously "chopping" the audio by skipping non-speech chunks.
         accumulators[speaker, default: []].append(contentsOf: chunk.buffer.samples)
         lastChunkTimes[speaker] = now
+        
+        // Note: Diarization will be run on accumulated buffers when flushing (see flushBuffer method)
+        // This ensures we have enough audio (1-5 seconds) for diarization to work effectively
         
         // Detect if THIS chunk contains speech
         let hasSpeech = detectSpeech(in: chunk.buffer.samples)
@@ -220,13 +216,14 @@ class TranscriptionManager: ObservableObject {
         
         // Flush logic
         if silenceDetected && accumulatedDuration >= 1.0 {
-            // End of sentence/speech segment - flush everything
+            // End of sentence/speech segment - flush everything at a natural pause
             Log.transcription.debug("Flushing buffer for \(speaker, privacy: .public) due to silence")
             await flushBuffer(for: speaker, keepOverlap: false)
             lastSpeechTimes[speaker] = now // Reset silence timer after flush
-        } else if accumulatedDuration >= bufferDuration {
-            // Buffer full during continuous speech - flush with overlap to prevent word clipping
-            Log.transcription.debug("Buffer duration threshold reached for \(speaker, privacy: .public), flushing with overlap")
+        } else if accumulatedDuration >= maxSegmentDuration {
+            // Extremely long continuous speech with no pause - force a flush with overlap
+            // This is a safety valve; in normal scenarios we prefer the silence-based path above.
+            Log.transcription.debug("Max segment duration reached for \(speaker, privacy: .public), flushing with overlap")
             await flushBuffer(for: speaker, keepOverlap: true)
         }
     }
@@ -247,7 +244,77 @@ class TranscriptionManager: ObservableObject {
             return
         }
         
-        let hasSpeech = speechDetectedInCurrentBuffer[speaker] ?? false
+        // For "Others" buffers, run diarization on the accumulated audio before flushing
+        // This gives us enough audio (1-5 seconds) for diarization to work
+        var finalSpeaker = speaker
+        if speaker == "Others" && isDiarizationEnabled, let diarizer = diarizer {
+            let accumulatedDuration = Double(samples.count) / Double(sampleRate)
+            
+            // Only run diarization if we have at least 1 second of audio
+            if accumulatedDuration >= 1.0 {
+                do {
+                    // Create a buffer from accumulated audio for diarization
+                    let accumulatedBuffer = AudioBuffer(
+                        samples: samples,
+                        sampleRate: sampleRate,
+                        timestamp: Date(),
+                        source: .system
+                    )
+                    
+                    let segments = try await diarizer.diarizeSystemAudio(accumulatedBuffer)
+                    
+                    if segments.isEmpty {
+                        Log.diarization.debug("No speaker segments found in accumulated buffer (samples: \(samples.count), duration: \(String(format: "%.2f", accumulatedDuration))s)")
+                    } else {
+                        Log.diarization.info("Found \(segments.count) speaker segments in accumulated buffer (\(String(format: "%.2f", accumulatedDuration))s)")
+                        
+                        // Find the speaker with the most speaking time in this accumulated segment
+                        var speakerDurations: [Int: Double] = [:]
+                        for segment in segments {
+                            let numericId = segment.numericSpeakerId
+                            speakerDurations[numericId, default: 0] += segment.duration
+                        }
+                        
+                        // Get the dominant speaker
+                        if let (speakerId, duration) = speakerDurations.max(by: { $0.value < $1.value }) {
+                            // Get speaker label from identifier
+                            finalSpeaker = await speakerIdentifier.getLabel(for: speakerId)
+                            
+                            // Update speaker activity from all segments
+                            await speakerIdentifier.updateFromSegments(segments)
+                            
+                            // Update active speakers list
+                            activeSpeakers = await speakerIdentifier.getActiveSpeakers()
+                            
+                            Log.diarization.info("Identified speaker \(speakerId) -> '\(finalSpeaker, privacy: .public)' (duration: \(String(format: "%.2f", duration))s) from \(String(format: "%.2f", accumulatedDuration))s buffer")
+                            
+                            // If we identified a specific speaker, transfer the accumulator
+                            if finalSpeaker != "Others" {
+                                accumulators[finalSpeaker] = samples
+                                accumulators.removeValue(forKey: "Others")
+                                
+                                // Transfer state
+                                if let lastSpeech = lastSpeechTimes["Others"] {
+                                    lastSpeechTimes[finalSpeaker] = lastSpeech
+                                    lastSpeechTimes.removeValue(forKey: "Others")
+                                }
+                                if let speechDetected = speechDetectedInCurrentBuffer["Others"] {
+                                    speechDetectedInCurrentBuffer[finalSpeaker] = speechDetected
+                                    speechDetectedInCurrentBuffer.removeValue(forKey: "Others")
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    Log.diarization.error("Diarization failed on accumulated buffer, using 'Others' label: \(error.localizedDescription, privacy: .public)")
+                    // Fall back to "Others" on error
+                }
+            }
+        }
+        
+        // Use the final speaker (may have been updated by diarization)
+        let finalSamples = accumulators[finalSpeaker] ?? samples
+        let hasSpeech = speechDetectedInCurrentBuffer[finalSpeaker] ?? speechDetectedInCurrentBuffer[speaker] ?? false
         
         // If no speech was detected in this entire window, just clear/overlap and exit
         guard hasSpeech else {
@@ -264,27 +331,27 @@ class TranscriptionManager: ObservableObject {
         }
         
         // Reset speech flag for the next segment
-        speechDetectedInCurrentBuffer[speaker] = false
+        speechDetectedInCurrentBuffer[finalSpeaker] = false
         
-        let duration = Double(samples.count) / Double(sampleRate)
+        let duration = Double(finalSamples.count) / Double(sampleRate)
         
         // Minimum duration for Whisper to be effective is ~0.5s
         guard duration >= 0.5 else {
             // If we're not keeping overlap, clear it anyway
             if !keepOverlap {
-                accumulators[speaker] = []
+                accumulators[finalSpeaker] = []
             }
             return
         }
         
-        Log.transcription.info("Flushing buffer: \(samples.count) samples (\(String(format: "%.2f", duration), privacy: .public)s) from \(speaker, privacy: .public)")
+        Log.transcription.info("Flushing buffer: \(finalSamples.count) samples (\(String(format: "%.2f", duration), privacy: .public)s) from \(finalSpeaker, privacy: .public)")
         
         // Determine audio source - "Me" is microphone, everything else is system
-        let audioSource: AudioBuffer.AudioSource = speaker == "Me" ? .microphone : .system
+        let audioSource: AudioBuffer.AudioSource = finalSpeaker == "Me" ? .microphone : .system
         
         // Create audio buffer for transcription
         let audioBuffer = AudioBuffer(
-            samples: samples,
+            samples: finalSamples,
             sampleRate: sampleRate,
             timestamp: Date(),
             source: audioSource
@@ -294,20 +361,20 @@ class TranscriptionManager: ObservableObject {
         if keepOverlap {
             // Keep the tail of the audio to prepend to the next chunk
             let overlapSamplesCount = Int(overlapDuration * Double(sampleRate))
-            if samples.count > overlapSamplesCount {
-                accumulators[speaker] = Array(samples.suffix(overlapSamplesCount))
+            if finalSamples.count > overlapSamplesCount {
+                accumulators[finalSpeaker] = Array(finalSamples.suffix(overlapSamplesCount))
                 Log.transcription.debug("Kept \(overlapSamplesCount) samples for overlap")
             } else {
-                accumulators[speaker] = samples // Keep all if shorter than overlap
+                accumulators[finalSpeaker] = finalSamples // Keep all if shorter than overlap
             }
         } else {
             // Clean break
-            accumulators[speaker] = []
+            accumulators[finalSpeaker] = []
         }
         
         // Transcribe in background
         let task = Task {
-            await transcribeBuffer(audioBuffer, speaker: speaker)
+            await transcribeBuffer(audioBuffer, speaker: finalSpeaker)
         }
         
         pendingTasks.insert(task)
@@ -344,9 +411,11 @@ class TranscriptionManager: ObservableObject {
             // We only do this on the MainActor since transcriptEntries is @Published
             await MainActor.run {
                 if let lastEntry = transcriptEntries.last(where: { $0.speaker == speaker }) {
-                    // If the segments are close in time, reconcile them
+                    // If the segments are close in time, reconcile them.
+                    // Use maxSegmentDuration as an upper bound for how far apart two chunks
+                    // can be while still being considered part of the same logical segment.
                     let timeGap = result.timestamp.timeIntervalSince(lastEntry.timestamp)
-                    if timeGap < (bufferDuration + 2.0) { 
+                    if timeGap < (maxSegmentDuration + 2.0) {
                         finalResultText = reconcile(newText: result.text, with: lastEntry.text)
                     }
                 }

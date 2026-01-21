@@ -109,19 +109,26 @@ actor FluidAudioDiarizer {
     /// - Parameter buffer: The audio buffer to process
     /// - Returns: Array of speaker segments with timing and speaker IDs
     func diarizeSystemAudio(_ buffer: AudioBuffer) async throws -> [SpeakerSegment] {
-        guard isLoaded, let diarizer = onlineDiarizer else {
-            Log.diarization.warning("Diarizer not loaded, returning empty segments")
+        guard self.isLoaded, let diarizer = self.onlineDiarizer else {
+            Log.diarization.warning("Diarizer not loaded (isLoaded: \(self.isLoaded), diarizer: \(self.onlineDiarizer != nil)), returning empty segments")
             return []
         }
         
         let samples = buffer.samples
         guard !samples.isEmpty else {
+            Log.diarization.debug("Empty audio buffer provided to diarization")
             return []
         }
         
         let chunkDuration = Double(samples.count) / Double(sampleRate)
         
-        Log.diarization.debug("Processing \(samples.count) samples for diarization (\(String(format: "%.2f", chunkDuration))s)")
+        // Skip very short chunks - diarization needs at least ~0.5s of audio
+        guard chunkDuration >= 0.5 else {
+            Log.diarization.debug("Chunk too short for diarization (\(String(format: "%.2f", chunkDuration))s), skipping")
+            return []
+        }
+        
+        Log.diarization.debug("Processing \(samples.count) samples for diarization (\(String(format: "%.2f", chunkDuration))s) at offset \(String(format: "%.2f", self.cumulativeTimeOffset))s")
         
         do {
             // FluidAudio DiarizerManager.performCompleteDiarization returns DiarizationResult
@@ -146,11 +153,16 @@ actor FluidAudioDiarizer {
             // Accumulate audio for potential offline refinement
             accumulatedAudio.append(contentsOf: samples)
             
-            Log.diarization.debug("Diarization complete: \(segments.count) segments found")
+            if segments.isEmpty {
+                Log.diarization.debug("Diarization complete but no segments found (this may be normal for silence/noise)")
+            } else {
+                let uniqueSpeakers = Array(Set(segments.map { $0.speakerId })).sorted()
+                Log.diarization.info("Diarization complete: \(segments.count) segments found with speakers: \(uniqueSpeakers.joined(separator: ", "), privacy: .public)")
+            }
             
             return segments
         } catch {
-            Log.diarization.error("Diarization failed: \(error.localizedDescription, privacy: .public)")
+            Log.diarization.error("Diarization failed: \(error.localizedDescription, privacy: .public) (type: \(String(describing: type(of: error)), privacy: .public))")
             // Return empty segments on error - fallback to "Others" label
             return []
         }
