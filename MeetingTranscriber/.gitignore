@@ -1,0 +1,79 @@
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+*.xcuserdata
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj
+
+# Build artifacts
+*.app/
+*.dSYM/
+*.o
+*.a
+*.dylib
+*.framework
+DerivedData/
+
+# Models (Whisper, FluidAudio, etc.)
+*.mlmodel
+*.mlpackage
+*.onnx
+*.tflite
+*.pt
+*.pth
+Models/
+*.huggingface/
+.cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# App bundles (built artifacts)
+*.app/
+MeetingTranscriber.app/
+MeetingTranscriberV1.app/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swiftpm
+
+# Python (if any)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# Node (if any)
+node_modules/
+npm-debug.log
+
+# Large repository packs
+*.pack
