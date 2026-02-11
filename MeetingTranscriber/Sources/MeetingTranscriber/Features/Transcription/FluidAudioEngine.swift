@@ -181,7 +181,8 @@ actor FluidAudioEngine {
 
 // MARK: - TranscriptionResult
 
-/// Result from a transcription operation.
+/// Result from a transcription operation
+/// This struct is shared between WhisperEngine and FluidAudioEngine
 struct TranscriptionResult: Sendable {
     /// The transcribed text
     let text: String
