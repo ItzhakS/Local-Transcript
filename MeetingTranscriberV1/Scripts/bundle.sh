@@ -22,7 +22,7 @@ fi
 echo "✅ Build complete"
 
 # Create app bundle structure
-APP_NAME="MeetingTranscriber.app"
+APP_NAME="MeetingTranscriberV1.app"
 APP_BUNDLE="$APP_NAME"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"

@@ -52,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Pre-load transcription model in the background so "Start Recording" is instant
             Log.transcription.info("Pre-loading transcription model...")
             try? await self.transcriptionManager.start()
-            // Stop immediately so we're not "recording" but the model remains loaded in WhisperEngine
+            // Stop immediately so we're not "recording" but the model remains loaded in FluidAudioEngine
             await self.transcriptionManager.stop()
             Log.transcription.info("Transcription model pre-loaded and ready")
             

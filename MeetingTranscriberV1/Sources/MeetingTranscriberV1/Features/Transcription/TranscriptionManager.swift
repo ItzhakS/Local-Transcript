@@ -1,4 +1,5 @@
 import Foundation
+import FluidAudio
 
 /// Orchestrates transcription of audio streams with buffering, VAD, and speaker diarization
 @MainActor
@@ -17,7 +18,7 @@ class TranscriptionManager: ObservableObject {
     
     // MARK: - Private Properties
     
-    private let whisperEngine: WhisperEngine
+    private let fluidAudioEngine: FluidAudioEngine
     private var pendingTasks: Set<Task<Void, Never>> = []
     
     // Diarization components
@@ -44,10 +45,10 @@ class TranscriptionManager: ObservableObject {
     
     // MARK: - Initialization
     
-    init(modelName: String = "small", diarizer: FluidAudioDiarizer? = nil) {
-        self.whisperEngine = WhisperEngine(modelName: modelName)
+    init(modelVersion: AsrModelVersion = .v3, diarizer: FluidAudioDiarizer? = nil) {
+        self.fluidAudioEngine = FluidAudioEngine(modelVersion: modelVersion)
         self.diarizer = diarizer
-        Log.transcription.info("TranscriptionManager initialized with model: \(modelName, privacy: .public), diarization: \(diarizer != nil)")
+        Log.transcription.info("TranscriptionManager initialized with FluidAudio model version: \(modelVersion == .v3 ? "v3" : "v2", privacy: .public), diarization: \(diarizer != nil)")
     }
     
     /// Set the diarizer after initialization
@@ -73,8 +74,8 @@ class TranscriptionManager: ObservableObject {
         
         Log.transcription.info("Starting transcription system...")
         
-        // Load the Whisper model
-        try await whisperEngine.loadModel()
+        // Load the FluidAudio ASR model
+        try await fluidAudioEngine.loadModel()
         
         // Start diarization if available
         if let diarizer = diarizer, isDiarizationEnabled {
@@ -335,8 +336,8 @@ class TranscriptionManager: ObservableObject {
         
         let duration = Double(finalSamples.count) / Double(sampleRate)
         
-        // Minimum duration for Whisper to be effective is ~0.5s
-        guard duration >= 0.5 else {
+        // Minimum duration for FluidAudio AsrManager is 1.0 second (16,000 samples)
+        guard duration >= 1.0 else {
             // If we're not keeping overlap, clear it anyway
             if !keepOverlap {
                 accumulators[finalSpeaker] = []
@@ -388,7 +389,7 @@ class TranscriptionManager: ObservableObject {
     /// Transcribe an audio buffer and add to transcript
     private func transcribeBuffer(_ buffer: AudioBuffer, speaker: String) async {
         do {
-            let result = try await whisperEngine.transcribe(buffer)
+            let result = try await fluidAudioEngine.transcribe(buffer)
             
             // Only add non-empty transcriptions
             guard !result.isEmpty else {
@@ -396,11 +397,9 @@ class TranscriptionManager: ObservableObject {
                 return
             }
             
-            // Filter out common Whisper meta-tags and noise
-            let forbiddenTokens = ["[blank_audio]", "[skip]", "[noise]", "[laughter]", "[vocalized-noise]", "[unintelligible]"]
-            let lowerText = result.text.lowercased()
-            if forbiddenTokens.contains(where: { lowerText.contains($0) }) || result.text.trimmingCharacters(in: .punctuationCharacters).isEmpty {
-                Log.transcription.debug("Filtering Whisper meta-tag or empty punctuation from \(speaker, privacy: .public): \"\(result.text, privacy: .public)\"")
+            // Filter out empty or punctuation-only text (Parakeet TDT may produce these)
+            if result.text.trimmingCharacters(in: .punctuationCharacters).isEmpty {
+                Log.transcription.debug("Filtering empty/punctuation-only text from \(speaker, privacy: .public): \"\(result.text, privacy: .public)\"")
                 return
             }
             

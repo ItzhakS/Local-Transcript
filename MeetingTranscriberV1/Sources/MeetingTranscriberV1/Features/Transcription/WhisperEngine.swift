@@ -145,25 +145,3 @@ actor WhisperEngine {
     }
 }
 
-// MARK: - TranscriptionResult
-
-/// Result from a transcription operation
-struct TranscriptionResult: Sendable {
-    /// The transcribed text
-    let text: String
-    
-    /// Confidence score (0.0 to 1.0)
-    let confidence: Double
-    
-    /// Duration of the audio segment in seconds
-    let duration: TimeInterval
-    
-    /// Timestamp when the audio was captured
-    let timestamp: Date
-    
-    /// Whether the transcription is empty
-    var isEmpty: Bool {
-        text.isEmpty
-    }
-}
-
