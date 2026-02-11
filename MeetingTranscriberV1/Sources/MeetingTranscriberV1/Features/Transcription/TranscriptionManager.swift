@@ -41,7 +41,12 @@ class TranscriptionManager: ObservableObject {
     private let sampleRate: Int = 16000
     
     // VAD (Voice Activity Detection) parameters
-    private let energyThreshold: Float = 1e-6  // Minimum energy to consider as speech
+    private let energyThreshold: Float = 1e-6  // Minimum energy to consider as speech (fallback when FluidAudio VAD unavailable)
+    
+    // FluidAudio VAD (Silero) - optional; falls back to energy-based if load fails
+    private var vadManager: VadManager?
+    private var vadBuffers: [String: [Float]] = [:]
+    private let vadChunkSize = 4096  // VadManager.chunkSize (256ms at 16kHz)
     
     // MARK: - Initialization
     
@@ -77,6 +82,15 @@ class TranscriptionManager: ObservableObject {
         // Load the FluidAudio ASR model
         try await fluidAudioEngine.loadModel()
         
+        // Load FluidAudio VAD (Silero); fall back to energy-based if load fails
+        do {
+            vadManager = try await VadManager()
+            Log.transcription.info("FluidAudio VAD loaded successfully")
+        } catch {
+            Log.transcription.warning("Failed to load FluidAudio VAD, using energy-based detection: \(error.localizedDescription, privacy: .public)")
+            vadManager = nil
+        }
+        
         // Start diarization if available
         if let diarizer = diarizer, isDiarizationEnabled {
             do {
@@ -105,6 +119,7 @@ class TranscriptionManager: ObservableObject {
         lastChunkTimes = [:]
         lastSpeechTimes = [:]
         speechDetectedInCurrentBuffer = [:]
+        vadBuffers = [:]
         transcriptEntries = []
         activeSpeakers = [:]
         
@@ -142,6 +157,7 @@ class TranscriptionManager: ObservableObject {
             Log.transcription.info("Diarization stopped")
         }
         
+        vadBuffers = [:]
         isTranscribing = false
         Log.transcription.info("Transcription system stopped")
     }
@@ -202,8 +218,8 @@ class TranscriptionManager: ObservableObject {
         // Note: Diarization will be run on accumulated buffers when flushing (see flushBuffer method)
         // This ensures we have enough audio (1-5 seconds) for diarization to work effectively
         
-        // Detect if THIS chunk contains speech
-        let hasSpeech = detectSpeech(in: chunk.buffer.samples)
+        // Detect if THIS chunk contains speech (FluidAudio VAD when available, else energy-based)
+        let hasSpeech = await detectSpeechWithVad(samples: chunk.buffer.samples, speaker: speaker)
         if hasSpeech {
             lastSpeechTimes[speaker] = now
             speechDetectedInCurrentBuffer[speaker] = true
@@ -229,7 +245,37 @@ class TranscriptionManager: ObservableObject {
         }
     }
     
-    /// Detect if audio contains speech using simple energy-based VAD
+    /// Detect if audio contains speech using FluidAudio VAD when available, else energy-based fallback.
+    /// Buffers samples per speaker until we have 4096 (256ms), then runs VadManager.process().
+    private func detectSpeechWithVad(samples: [Float], speaker: String) async -> Bool {
+        // Append to per-speaker VAD buffer
+        vadBuffers[speaker, default: []].append(contentsOf: samples)
+        
+        guard let vad = vadManager else {
+            return detectSpeech(in: samples)
+        }
+        
+        // Process when we have at least one full chunk
+        guard (vadBuffers[speaker]?.count ?? 0) >= vadChunkSize else {
+            return detectSpeech(in: samples)
+        }
+        
+        let buffer = vadBuffers[speaker]!
+        let toProcess = Array(buffer.prefix(vadChunkSize))
+        let remainder = Array(buffer.dropFirst(vadChunkSize))
+        vadBuffers[speaker] = remainder.isEmpty ? nil : remainder
+        
+        do {
+            let results = try await vad.process(toProcess)
+            let hasSpeech = results.contains { $0.isVoiceActive }
+            return hasSpeech
+        } catch {
+            Log.transcription.warning("VAD process failed, using energy-based fallback: \(error.localizedDescription, privacy: .public)")
+            return detectSpeech(in: samples)
+        }
+    }
+    
+    /// Energy-based VAD fallback when FluidAudio VAD is unavailable or fails
     private func detectSpeech(in samples: [Float]) -> Bool {
         guard !samples.isEmpty else { return false }
         

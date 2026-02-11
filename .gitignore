@@ -1,4 +1,7 @@
 
+# Directories and files starting with a period (e.g. .cursor, .cursorrules)
+.cursor/
+
 .clinerules/byterover-rules.md
 .kilocode/rules/byterover-rules.md
 .roo/rules/byterover-rules.md
